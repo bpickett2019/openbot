@@ -116,12 +116,18 @@ function PlansReady({
   const owned = list.servers.filter((server) => server.state !== "deleted");
   const showPlans = (devFeatureOverride("cloudServers") ?? (list.available && cloudServersOn)) && plans.length > 0;
   // A plan that a server of the account uses, so its row shows "Your plan".
-  const ownedPlans = new Set(owned.map((server) => server.plan));
+  const ownedPlans = new Set(owned.flatMap((server) => (server.funding === "stripe" ? [server.plan] : [])));
 
   return (
     <>
       <PlansHeader
-        description={showPlans ? t("mobile.server.hosted.intro.description") : t("mobile.server.hosted.unavailable")}
+        description={
+          owned.some((server) => server.funding === "organization")
+            ? t("mobile.server.hosted.organizationDescription")
+            : showPlans
+              ? t("mobile.server.hosted.intro.description")
+              : t("mobile.server.hosted.unavailable")
+        }
       />
 
       {owned.length > 0 ? (
@@ -217,7 +223,7 @@ function PlansHeader({ description }: { description: string }) {
   );
 }
 
-type OwnedServerState = "payment" | "setup" | "starting" | "running" | "stopped" | "planEnded" | "failed";
+type OwnedServerState = "payment" | "setup" | "starting" | "running" | "stopped" | "planEnded" | "failed" | "revoked";
 
 const OWNED_STATE_TEXT = {
   payment: "mobile.server.hosted.state.payment",
@@ -227,13 +233,15 @@ const OWNED_STATE_TEXT = {
   stopped: "mobile.server.hosted.state.stopped",
   planEnded: "mobile.server.hosted.state.planEnded",
   failed: "mobile.server.hosted.state.failed",
+  revoked: "mobile.server.hosted.administratorStopped",
 } as const satisfies Record<OwnedServerState, MobileTextKey>;
 
 function ownedServerState(server: HostedServerSummary): OwnedServerState {
-  if (server.error === "plan_ended") return "planEnded";
+  if (server.funding === "organization" && server.fundingStatus === "revoked") return "revoked";
+  if (server.funding === "stripe" && server.error === "plan_ended") return "planEnded";
   switch (server.state) {
     case "awaiting_payment":
-      return "payment";
+      return server.funding === "stripe" ? "payment" : "failed";
     case "creating":
     case "starting":
       return "setup";
@@ -254,16 +262,27 @@ function OwnedServerRow({ server, listed }: { server: HostedServerSummary; liste
   const { t, format } = useText();
   const [muted] = useThemeColor(["muted"]);
   const state = ownedServerState(server);
-  const plan = t(PLAN_TEXT[server.plan].name);
-  const interval = server.interval === "year" ? t("mobile.server.hosted.yearly") : t("mobile.server.hosted.monthly");
-  const supportingText =
-    server.deletionScheduledAt != null
-      ? t("mobile.server.hosted.serverPlanEnds", {
-          plan,
-          interval,
-          date: format.date(server.deletionScheduledAt, DATE_FORMAT),
-        })
-      : t("mobile.server.hosted.serverPlan", { plan, interval });
+  let supportingText: string;
+  if (server.funding === "organization") {
+    supportingText = t("mobile.server.hosted.organizationSpec", {
+      provider: "DigitalOcean",
+      vcpu: server.resources.vcpu,
+      memory: server.resources.memoryGb,
+      disk: server.resources.diskGb,
+      region: server.resources.region,
+    });
+  } else {
+    const plan = t(PLAN_TEXT[server.plan].name);
+    const interval = server.interval === "year" ? t("mobile.server.hosted.yearly") : t("mobile.server.hosted.monthly");
+    supportingText =
+      server.deletionScheduledAt != null
+        ? t("mobile.server.hosted.serverPlanEnds", {
+            plan,
+            interval,
+            date: format.date(server.deletionScheduledAt, DATE_FORMAT),
+          })
+        : t("mobile.server.hosted.serverPlan", { plan, interval });
+  }
   const inSetup = hostedServerInSetup(server, listed);
   const label = (
     <Typography.Paragraph
@@ -304,6 +323,11 @@ function OwnedServerRow({ server, listed }: { server: HostedServerSummary; liste
       }
     >
       <Typography.Paragraph numberOfLines={1}>{server.name}</Typography.Paragraph>
+      {server.funding === "organization" ? (
+        <Typography.Paragraph type="body-xs" className="text-text-secondary">
+          {t("mobile.server.hosted.organizationFunded")}
+        </Typography.Paragraph>
+      ) : null}
     </SettingsRow>
   );
 }

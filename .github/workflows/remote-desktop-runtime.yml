@@ -541,7 +541,7 @@ jobs:
         run: bun run test:remote-desktop-runtime
 
       # This runner did not install the build packages. It installs only the runtime libraries that
-      # scripts/hosting/provision.sh installs, so a library missing from the template stops here.
+      # scripts/hosting/packages.txt lists, so a missing runtime library stops here.
       - name: Run published Linux smoke test
         if: runner.os == 'Linux'
         run: |

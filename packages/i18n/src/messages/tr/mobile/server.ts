@@ -79,6 +79,14 @@ export const messages = {
   "mobile.server.hosted.currentPlan": "Planınız",
   "mobile.server.hosted.soldOut": "Tükendi",
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "Kuruluş tarafından finanse edilir",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB bellek, {disk} GB kalıcı depolama · {region}",
+  "mobile.server.hosted.administratorStopped": "Yönetici tarafından durduruldu",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "Finansman etkin değil. Bu sunucuyu başlatmadan önce yöneticinizden finansmanı yeniden etkinleştirmesini isteyin.",
+  "mobile.server.hosted.organizationDescription":
+    "Bu paylaşılan sunucuyu kuruluşunuz yönetir. Çalışanlar davet ile katılır.",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · {date} tarihinde sona erer",
   "mobile.server.hosted.state.payment": "Ödeme bekleniyor",
   "mobile.server.hosted.state.setup": "Kuruluyor",

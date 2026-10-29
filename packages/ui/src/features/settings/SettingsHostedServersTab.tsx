@@ -72,9 +72,19 @@ export function SettingsHostedServersTab(props: SettingsHostedServersTabProps) {
   const { t } = useText();
   const state = () => props.store.state;
   const servers = () => state().servers.filter((server) => !props.excludedServerIds?.includes(server.serverId));
-  // Also a server whose setup failed: it has no sandbox to stop, so it stays in `error`.
-  const planEnded = (server: HostedServerSummary) => server.error === "plan_ended";
+  const revoked = (server: HostedServerSummary) =>
+    server.funding === "organization" && server.fundingStatus === "revoked";
+  const planEnded = (server: HostedServerSummary) => server.funding === "stripe" && server.error === "plan_ended";
   const description = (server: HostedServerSummary) => {
+    if (server.funding === "organization") {
+      return t("settings.hostedServers.organizationSpec", {
+        provider: "DigitalOcean",
+        vcpu: server.resources.vcpu,
+        memory: server.resources.memoryGb,
+        disk: server.resources.diskGb,
+        region: server.resources.region,
+      });
+    }
     if (server.state === "awaiting_payment") return t("settings.hostedServers.paymentDescription");
     if (planEnded(server)) return t("settings.hostedServers.planEndedDescription");
     if (server.state === "error") return t("settings.hostedServers.errorDescription");
@@ -90,7 +100,9 @@ export function SettingsHostedServersTab(props: SettingsHostedServersTabProps) {
 
   return (
     <SettingsSection
-      title={t(props.inBilling ? "billing.otherServers" : "settings.hostedServers.title")}
+      title={t(
+        props.inBilling && props.excludedServerIds?.length ? "billing.otherServers" : "settings.hostedServers.title",
+      )}
       description={props.inBilling ? undefined : t("settings.hostedServers.description")}
     >
       <Show when={props.onAddServer}>
@@ -103,9 +115,11 @@ export function SettingsHostedServersTab(props: SettingsHostedServersTabProps) {
           </div>
         )}
       </Show>
-      <Text tone="muted" variant="caption">
-        {t("settings.hostedServers.usageNote")}
-      </Text>
+      <Show when={!servers().some(revoked)}>
+        <Text tone="muted" variant="caption">
+          {t("settings.hostedServers.usageNote")}
+        </Text>
+      </Show>
 
       <Show when={state().error}>{(message) => <p class="settings-modal-error">{message()}</p>}</Show>
       <Show
@@ -132,17 +146,34 @@ export function SettingsHostedServersTab(props: SettingsHostedServersTabProps) {
                 <ItemContent>
                   <ItemTitle>
                     {server.name}
+                    <Show when={server.funding === "organization"}>
+                      <Badge variant="secondary">{t("settings.hostedServers.organizationFunded")}</Badge>
+                    </Show>
                     <Show
-                      when={planEnded(server)}
-                      fallback={<Badge variant={STATE_VARIANTS[server.state]}>{t(STATE_LABELS[server.state])}</Badge>}
+                      when={revoked(server)}
+                      fallback={
+                        <Show
+                          when={planEnded(server)}
+                          fallback={
+                            <Badge variant={STATE_VARIANTS[server.state]}>{t(STATE_LABELS[server.state])}</Badge>
+                          }
+                        >
+                          <Badge variant="warning-light">{t("settings.hostedServers.state.planEnded")}</Badge>
+                        </Show>
+                      }
                     >
-                      <Badge variant="warning-light">{t("settings.hostedServers.state.planEnded")}</Badge>
+                      <Badge variant="secondary">{t("settings.hostedServers.administratorStopped")}</Badge>
                     </Show>
                   </ItemTitle>
                   <ItemDescription>{description(server)}</ItemDescription>
+                  <Show when={revoked(server)}>
+                    <ItemDescription>{t("settings.hostedServers.fundingRevokedDescription")}</ItemDescription>
+                  </Show>
                 </ItemContent>
                 <ItemActions class="hosted-servers-actions">
-                  <Show when={server.state === "awaiting_payment" || planEnded(server)}>
+                  <Show
+                    when={server.funding === "stripe" && (server.state === "awaiting_payment" || planEnded(server))}
+                  >
                     <Button
                       variant="outline"
                       size="sm"
@@ -158,7 +189,11 @@ export function SettingsHostedServersTab(props: SettingsHostedServersTabProps) {
                         : t(planEnded(server) ? "settings.hostedServers.renew" : "settings.hostedServers.pay")}
                     </Button>
                   </Show>
-                  <Show when={(server.state === "stopped" || server.state === "error") && !planEnded(server)}>
+                  <Show
+                    when={
+                      (server.state === "stopped" || server.state === "error") && !planEnded(server) && !revoked(server)
+                    }
+                  >
                     <Button
                       variant="outline"
                       size="sm"

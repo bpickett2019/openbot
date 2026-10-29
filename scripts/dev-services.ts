@@ -33,8 +33,6 @@ import {
   developmentChildEnvironment,
   developmentSettingsForService,
   loadDevelopmentEnvironment,
-  loadSharedDevelopmentEnvironment,
-  requireDevelopmentValues,
 } from "./development-environment";
 import { resolveDevelopmentAppDataRoot } from "./development-state-paths";
 import { withoutElectronRuntimeFlags } from "./electron-spawn-env";
@@ -277,17 +275,6 @@ export function parseDevelopmentTarget(args: string[]): DevelopmentInvocation {
   };
 }
 
-/**
- * The test Worker lets an account create servers when the app sends this key. It is in the encrypted
- * `.env.dev`, so only a developer with `DOTENV_PRIVATE_KEY_DEV` can read it. Never log it.
- */
-async function readHostingDeveloperKey(): Promise<string> {
-  const shared = await loadSharedDevelopmentEnvironment(projectRoot);
-  const environment = { ...shared, ...process.env };
-  requireDevelopmentValues(environment, ["HOSTED_SERVERS_DEVELOPER_KEY"]);
-  return environment.HOSTED_SERVERS_DEVELOPER_KEY ?? "";
-}
-
 async function main(): Promise<void> {
   const { target, dryRun, force, shared, hostingTest, slack } = parseDevelopmentTarget(process.argv.slice(2));
   if (!dryRun && prepareDevelopmentEnvironment() === "created") {
@@ -300,7 +287,6 @@ async function main(): Promise<void> {
     sharedEnvironment.OPENBOT_AUTH_API_URL = TEST_ACCOUNT_API_URL;
     sharedEnvironment.OPENBOT_MOBILE_AUTH_API_URL = TEST_ACCOUNT_API_URL;
     sharedEnvironment.OPENBOT_DEV_INSTANCE_ID ??= developmentInstanceIdForWorktree("openbot:hosting-test");
-    sharedEnvironment.OPENBOT_HOSTING_DEVELOPER_KEY = await readHostingDeveloperKey();
     // A dev role signs a throwaway account in with a code that only the local Worker returns.
     sharedEnvironment.OPENBOT_DEV_REMOTE_ROLE = "none";
     logger.info(`The app signs in to the test account Worker: ${TEST_ACCOUNT_API_URL}.`);
@@ -459,7 +445,6 @@ async function allocateDevelopmentPorts(
       reservedPorts.add(healthPort);
       sharedEnvironment.REMOTE_HEALTH_PORT = String(healthPort);
       sharedEnvironment.REMOTE_SESSION_SECRET ??= randomBytes(32).toString("hex");
-      sharedEnvironment.TURN_SHARED_SECRET ??= randomBytes(32).toString("hex");
       if (signalPort !== DEFAULT_REMOTE_SIGNAL_PORT) {
         logger.info(`Signal port ${DEFAULT_REMOTE_SIGNAL_PORT} is busy. Using ${signalPort}.`);
       }
@@ -508,6 +493,19 @@ async function allocateDevelopmentPorts(
       }
     }
     specs.push(createDevelopmentServiceSpec(service, environment));
+  }
+  const remote = specs.find((spec) => spec.name === "remote");
+  if (remote) {
+    const origins = new Set((remote.env.REMOTE_ALLOWED_ORIGINS ?? "").split(",").filter(Boolean));
+    for (const spec of specs) {
+      if (spec.name !== "app" && spec.name !== "test-client") continue;
+      const port = spec.env.OPENBOT_DEV_RENDERER_PORT;
+      if (port) {
+        origins.add(`http://localhost:${port}`);
+        origins.add(`http://127.0.0.1:${port}`);
+      }
+    }
+    remote.env.REMOTE_ALLOWED_ORIGINS = [...origins].join(",");
   }
   return specs;
 }
@@ -619,7 +617,11 @@ export function configureMobileConnectDevelopmentNetwork(
     environment.REMOTE_CONTROL_PLANE_URL ??= `http://127.0.0.1:${apiPort}`;
     environment.REMOTE_AUTH_WEBHOOK_URL ??= `http://127.0.0.1:${signalPort}/internal/auth-events`;
     environment.REMOTE_SIGNAL_URL ??= `ws://${address ?? "127.0.0.1"}:${signalPort}/v1/signal`;
-    environment.TURN_HOST ??= address ?? "127.0.0.1";
+    environment.REMOTE_ALLOWED_ORIGINS ??= [
+      `http://127.0.0.1:${apiPort}`,
+      `http://localhost:${apiPort}`,
+      ...(address ? [`http://${address}:${apiPort}`] : []),
+    ].join(",");
   }
 
   if (!address) return;

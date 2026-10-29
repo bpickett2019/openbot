@@ -49,7 +49,7 @@ in_container() {
 # Stops a command that Docker does in the image.
 require_host() {
   in_container || return 0
-  fail "In a container, $1. See https://github.com/nightly-labs/openbot/blob/main/docs/docker.md"
+  fail "In a container, $1. See https://github.com/bpickett2019/openbot/blob/main/docs/docker.md"
 }
 
 require_root() {

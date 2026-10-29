@@ -1,9 +1,9 @@
 # OpenBot Remote
 
-This directory holds our own control plane for WebRTC connections. The Remote API relays SDP and ICE.
-Team files, chats, commands and video never pass through the Remote API or Cloudflare. The exceptions
-are the OpenBot Slack app, the OpenBot Discord bot and the OpenBot Telegram bot: see
-[Slack requests](#slack-requests), [Discord](#discord) and [Telegram updates](#telegram-updates).
+This directory holds the Signal control plane for WebRTC connections. Signal relays SDP and ICE,
+not Team files, chats, commands or desktop media. Direct WebRTC is preferred; encrypted relay
+traffic passes through Cloudflare Realtime when TURN is needed. Signal also carries the optional
+Slack, Discord and Telegram connector payloads described below.
 
 ## Flow
 
@@ -11,12 +11,12 @@ are the OpenBot Slack app, the OpenBot Discord bot and the OpenBot Telegram bot:
 2. Cloudflare D1 checks membership and creates a logical session.
 3. Cloudflare signs a short ES256 ticket. The ticket names the host, the user, the role, the protocol version and `authEpoch`.
 4. The client and the host open `WSS /v1/signal`. Signal validates the ticket locally through JWKS.
-5. Signal relays SDP and ICE and issues a `resume token` along with time-limited coturn credentials.
+5. Signal relays SDP and ICE and issues a `resume token` with session-bounded Cloudflare Realtime TURN credentials.
 6. Chromium sets up WebRTC. The Team API uses the `rpc`, `events` and `files` channels.
-7. ICE picks either a direct `p2p` path or `relay` through this coturn. Cloudflare is never on the data path.
+7. ICE picks a direct `p2p` path or an encrypted `relay` path through Cloudflare Realtime.
 
-Signal has no database. It stores no tokens, SDP, ICE, file names or message contents. Room and presence
-data exist only in process memory. The one exception is the queue of a hosted server that sleeps (see
+Signal has no application database. Rooms, presence, resume caches and the issued TURN credential
+ledger exist only in process memory. The queue of a hosted server that sleeps also lives in memory (see
 [Sleeping hosted servers](#sleeping-hosted-servers)): Signal keeps a Slack, Discord or Telegram event
 for it in memory, sealed to the host's key so that Signal cannot read it, for at most 10 minutes.
 
@@ -35,7 +35,7 @@ validation window.
 ## Slack requests
 
 The OpenBot Slack app sends the events and button presses of every workspace to one request URL,
-`https://signal.openbot.run/v1/slack/events`. Signal checks Slack's signature with the app's signing
+`<Signal HTTPS origin>/v1/slack/events`. Signal checks Slack's signature with the app's signing
 secret, answers Slack's `url_verification` challenge, and reads only the app ID (`api_app_id`), the
 workspace ID, and the event's type, channel type, thread and bot ID (to know whether it addresses
 OpenBot, not its text). `SLACK_SIGNING_SECRET` is a comma-separated list of `<app ID>:<signing secret>`,
@@ -151,52 +151,53 @@ service before Signal.
 
 ## Production requirements
 
-- Linux with Docker Engine and Docker Compose.
-- A static public IPv4 address.
-- `signal.openbot.run` and `turn.openbot.run` records in DNS only mode.
-- Open ports TCP 443, TCP/UDP 3478, TCP 5349 and UDP 49152-65535.
-- A Cloudflare token scoped to DNS edit for the `openbot.run` zone.
+The fork deployment is `remote/cloudflare/wrangler.jsonc`: one `lite` Container, default scheduling
+policy, one fixed Durable Object identity and public Worker HTTPS/WSS ingress. Do not load-balance
+independent in-memory Signal owners. Private Worker-to-Container transport is HTTP; public transport
+must remain HTTPS/WSS. The Worker replaces caller-supplied forwarding identity and strips cookies.
 
-The `signal.openbot.run` and `turn.openbot.run` records must be in **DNS only** mode. Do not enable the
-Cloudflare proxy for them. `api.openbot.run` stays a Cloudflare Worker.
+Required Worker secret bindings:
 
-If you already run a reverse proxy on port `443`, set `REMOTE_SIGNAL_BIND_ADDRESS=127.0.0.1`,
-`REMOTE_SIGNAL_PUBLIC_PORT=8081`, `REMOTE_SIGNAL_PORT=8081` and `REMOTE_TLS_DISABLED=true`. The reverse proxy
-must terminate TLS and forward the WebSocket to `http://127.0.0.1:8081`. Also set
-`REMOTE_TRUST_PROXY=true` so the IP limits use the client address from `X-Forwarded-For`.
+| Binding | Value |
+| --- | --- |
+| `REMOTE_CONTROL_PLANE_URL` | The owned account HTTPS origin. JWKS and allowed browser origins derive from it. |
+| `REMOTE_SIGNAL_ORIGIN` | The actual Signal HTTPS origin, without a path. |
+| `REMOTE_SESSION_SECRET` | Independent secret of at least 32 bytes. |
+| `REMOTE_AUTH_WEBHOOK_SECRET` | At least 32 bytes; identical to the account Worker's webhook secret. |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Owned Cloudflare Realtime issuer credentials; never sent to clients. |
 
-The configuration in `nginx/signal.openbot.run.conf` uses the certificate from the ACME volume. Install
-`openbot-remote-nginx-reload.path` and `openbot-remote-nginx-reload.service` into `/etc/systemd/system/` as
-well. The unit reloads Nginx after the certificate is renewed:
+Optional connector/metrics bindings retain their current names. The browser origin must match
+the owned account origin. The released `openbot-app://app` desktop origin and native peers without
+an Origin header remain supported; opaque `null` and unrelated browser origins are refused.
+If an existing same-origin website proxy uses a different public origin, set `REMOTE_BROWSER_ORIGIN`
+to that one exact HTTPS origin. It replaces the browser origin; JWKS and account calls still use
+`REMOTE_CONTROL_PLANE_URL`. The selected Cloudflare-only website needs no override.
 
-```sh
-sudo cp remote/nginx/openbot-remote-nginx-reload.* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now openbot-remote-nginx-reload.path
-```
-
-Production secrets are stored in the tracked `.env.production` file as encrypted Dotenvx values.
-They use the same key pair as `apps/auth-api/.env.production`: `DOTENV_PRIVATE_KEY_PRODUCTION` in the
-root `.env.keys`. Do not make a new key pair. On the server, the ignored `remote/.env.keys` holds only a
-copy of that key. On a development computer, decrypt with `-fk .env.keys`. Do not pass the encrypted
-file straight to `docker compose --env-file`, because Compose will not decrypt the values.
-The `remote:*` scripts run Compose through Dotenvx and decrypt the values only in process memory.
-The `--overload` option keeps empty host environment variables from overriding the decrypted values.
-The scripts use `remote/bin/dotenvx`. The wrapper picks the pinned Node from the application runtime if the
-system Node is too old.
-
-Validate the environment and start the services:
+Set secrets with Wrangler against the explicit owned account and this configuration; do not load
+upstream encrypted environment files. The deployment command requires an explicit account ID and
+uses the operator's Wrangler login. It starts disabled:
 
 ```sh
-bun run remote:env:validate
-bun run remote:up
-bun run remote:check
+bun run remote:update --deploy
 ```
 
-Updating Signal may close the WebSocket. An active WebRTC connection stays up. `remote:update` puts coturn
-into drain and waits for the allocations to finish. A single coturn instance is no protection against machine
-failure. Forcing a coturn restart ends active relay sessions. The client performs an ICE restart and resumes
-a file transfer from the last acknowledged offset once the service is back.
+Only an approved runtime allowance permits `--deploy --enable`. Deployment/build success is not
+a readiness or relay test. Set account `REMOTE_SIGNAL_URL` to `wss://<signal-host>/v1/signal`;
+the account deployment derives its webhook URL as `https://<signal-host>/internal/auth-events`.
+See [the deployment and acceptance procedure](../docs/remote-session-deployment.md).
+
+Realtime issuance is asynchronous, deadline-bounded and capped by the remaining authenticated
+session life. Reconnect/refresh shares the session's credential and pending request. Provider
+failures do not fall back to empty ICE lists or upstream TURN.
+
+Revocation denies local access before provider I/O. Known issued credentials, including a late
+mint response, are revoked; failed revocation returns 503 so the account outbox can retry. The ledger
+is process-owned. Credentials lost with a process or an uncertain provider response can only expire
+by their bounded TTL. This does not prove immediate termination of every existing TURN allocation.
+
+Replacing Signal closes its WebSockets and clears process state. Check active direct and relay
+connections, independent device sessions and reconnects during an approved replacement. Do not
+claim transport preservation from health checks alone.
 
 Current hosts advertise `multiplex: true` and support independent device sessions at the same time.
 Reconnecting one session replaces only that session's Signal socket. Disconnecting or revoking one device
@@ -213,11 +214,10 @@ on the Signal server: a desktop environment does not change it.
 This also applies when the old client socket waits for its host to reconnect. Token signing finishes
 before Signal admits the new socket, so concurrent reconnects do not hold extra account slots.
 
-Production deployments keep `/opt/openbot/remote/.env.production`. A value in that file overrides
-the default, even when a release changes the repository's environment file. Check the running
-container's effective limit after a configuration change and Signal restart.
-
-See [the issue #325 deployment procedure](../docs/remote-session-deployment.md) for the production evidence,
-a Signal-only update, rollback commands, and the required desktop/mobile checks.
+Worker secret/variable changes require an explicit owned deployment. There is no production
+Compose/coturn/ACME launcher or automatic upstream secret loading. `compose.dev.yaml` is for local
+development only. Without a configured TURN issuer, local health can start but TURN issuance fails
+explicitly. `bun run test:signal` exercises HTTP/WebSocket behavior with synthetic credentials;
+it is not a Cloudflare Realtime acceptance test.
 
 To run Signal with your own account service, see [Self-hosted remote access](../docs/self-hosting.md).

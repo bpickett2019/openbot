@@ -4,9 +4,10 @@ import type { messages as source } from "../../en/error/billing";
 export const messages = {
   "error.billing.lifecycleFailed": "Não foi possível mudar o plano do servidor. Atualize a Cobrança e tente de novo.",
   "error.billing.confirmMismatch": "Digite o nome do servidor para excluí-lo.",
-  "error.billing.restartBusy": "O servidor não pode reiniciar agora. Tente de novo em um minuto.",
-  "error.billing.planRequired": "O plano deste servidor terminou. Renove-o para iniciar o servidor.",
-  "error.billing.planSoldOut": "Este plano está esgotado. Escolha outro plano.",
+  "error.billing.organizationManaged":
+    "Um administrador gerencia este host. O pagamento e as alterações de plano não estão disponíveis.",
+  "error.billing.fundingRevoked":
+    "O financiamento está inativo. Peça ao administrador para restaurá-lo antes de iniciar este servidor.",
   "error.billing.licenseExists": "Esta conta já tem uma licença. Altere os usuários dela em vez disso.",
   "error.billing.licenseCurrency": "A licença precisa usar a moeda dos seus outros planos.",
   "error.billing.licenseUsersInUse": "A licença não pode ter menos usuários do que as pessoas que a usam agora.",

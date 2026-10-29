@@ -17,7 +17,7 @@ export const Route = createFileRoute("/v2/hosting/plans")({
           Effect.gen(function* () {
             const user = yield* requestUser(request);
             if (!user) return apiError(401, "unauthorized", "Sign in is required.");
-            return json(yield* requestHostedServerService(request).plans(user));
+            return json(yield* requestHostedServerService().plans(user));
           }),
           hostedServerErrorResponse,
         ),

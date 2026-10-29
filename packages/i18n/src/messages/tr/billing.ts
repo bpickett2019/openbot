@@ -3,7 +3,7 @@ import type { messages as source } from "../en/billing";
 
 export const messages = {
   "billing.title": "Faturalandırma",
-  "billing.description": "Her sunucunun kendi planı vardır. Ödemeyi Stripe işler.",
+  "billing.description": "Sunucu planlarını ve kuruluş finansmanını görüntüleyin.",
   "billing.loading": "Faturalandırma yükleniyor…",
   "billing.unavailable": "Faturalandırma bu hesap sunucusunda kullanılamıyor.",
   "billing.loadFailed": "Faturalandırma yüklenemedi.",

@@ -79,6 +79,13 @@ export const messages = {
   "mobile.server.hosted.currentPlan": "ご利用中のプラン",
   "mobile.server.hosted.soldOut": "売り切れ",
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "組織負担",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} vCPU、{memory} GB メモリー、{disk} GB 永続ストレージ · {region}",
+  "mobile.server.hosted.administratorStopped": "管理者による停止",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "組織の費用負担が無効です。このサーバーを起動する前に、管理者に再開を依頼してください。",
+  "mobile.server.hosted.organizationDescription": "この共有サーバーは組織が管理します。スタッフは招待で参加します。",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · {date} に終了",
   "mobile.server.hosted.state.payment": "支払い待ち",
   "mobile.server.hosted.state.setup": "セットアップ中",

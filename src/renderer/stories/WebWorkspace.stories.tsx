@@ -272,6 +272,7 @@ const checkoutFetch: typeof fetch = async (input) => {
           available: true,
           servers: [
             {
+              funding: "stripe",
               serverId: NEW_SERVER_ID,
               name: "Cloud server",
               size: "default",
@@ -312,6 +313,7 @@ const sleepingFetch: typeof fetch = async (input, init) => {
     return Response.json({ serverId: "preview-host", state: "stopped", error: null, sleeping: true });
   if (url.endsWith("/preview-host/wake"))
     return Response.json({
+      funding: "stripe",
       serverId: "preview-host",
       name: "Preview computer",
       size: "small",

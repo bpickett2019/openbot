@@ -94,20 +94,44 @@ export const HOSTED_SERVER_CONTACT_URL = `mailto:hello@openbot.run?subject=${enc
  */
 export const HOSTING_DEVELOPER_KEY_HEADER = "OpenBot-Hosting-Developer-Key";
 
-export interface HostedServerSummary {
-  deletionScheduledAt?: number | null;
+export type HostedServerFunding = "stripe" | "organization";
+export type HostedServerFundingStatus = "active" | "revoked";
+
+interface HostedServerSummaryBase {
   /** The same value as the Remote host id of the server. */
   serverId: string;
   name: string;
   size: HostedServerSize;
-  plan: BillingPlanId;
-  interval: BillingInterval;
-  currency: BillingCurrency;
   state: HostedServerState;
   error: HostedServerError | null;
   createdAt: string;
   updatedAt: string;
 }
+
+export type HostedServerSummary =
+  | (HostedServerSummaryBase & {
+      funding: "stripe";
+      deletionScheduledAt?: number | null;
+      plan: BillingPlanId;
+      interval: BillingInterval;
+      currency: BillingCurrency;
+    })
+  | (HostedServerSummaryBase & {
+      funding: "organization";
+      fundingStatus: HostedServerFundingStatus;
+      size: "default";
+      deletionScheduledAt: null;
+      plan: null;
+      interval: null;
+      currency: null;
+      resources: {
+        provider: "digitalocean";
+        vcpu: number;
+        memoryGb: number;
+        diskGb: number;
+        region: string;
+      };
+    });
 
 /**
  * The state of one hosted server, for its owner and its members. `sleeping`: the Worker stopped the
@@ -118,6 +142,8 @@ export interface HostedServerStatus {
   state: HostedServerState;
   error: HostedServerError | null;
   sleeping: boolean;
+  funding?: HostedServerFunding;
+  fundingStatus?: HostedServerFundingStatus;
 }
 
 export interface HostedServerList {
@@ -154,9 +180,6 @@ export function parseHostedServerSummary(value: unknown): HostedServerSummary | 
     !isString(value.serverId) ||
     !isString(value.name) ||
     !isHostedServerSize(value.size) ||
-    !isOneOf(BILLING_PLAN_IDS, value.plan) ||
-    !isOneOf(BILLING_INTERVALS, value.interval) ||
-    !isOneOf(BILLING_CURRENCIES, value.currency) ||
     !isString(value.state) ||
     !(value.error === null || isString(value.error)) ||
     !isString(value.createdAt) ||
@@ -168,23 +191,78 @@ export function parseHostedServerSummary(value: unknown): HostedServerSummary | 
   const state: HostedServerState = isHostedServerState(value.state) ? value.state : "error";
   const error: HostedServerError | null =
     state !== value.state ? "provider_error" : isOneOf(HOSTED_SERVER_ERRORS, value.error) ? value.error : null;
+  const common = {
+    serverId: value.serverId,
+    name: value.name,
+    size: value.size,
+    state,
+    error,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+  if (value.funding === "organization") {
+    const resources = value.resources;
+    if (
+      (value.fundingStatus !== "active" && value.fundingStatus !== "revoked") ||
+      value.size !== "default" ||
+      value.plan !== null ||
+      value.interval !== null ||
+      value.currency !== null ||
+      value.deletionScheduledAt !== null ||
+      !isDynamicRecord(resources) ||
+      resources.provider !== "digitalocean" ||
+      !isNumber(resources.vcpu) ||
+      !Number.isSafeInteger(resources.vcpu) ||
+      resources.vcpu <= 0 ||
+      !isNumber(resources.memoryGb) ||
+      !Number.isFinite(resources.memoryGb) ||
+      resources.memoryGb <= 0 ||
+      !isNumber(resources.diskGb) ||
+      !Number.isSafeInteger(resources.diskGb) ||
+      resources.diskGb <= 0 ||
+      !isString(resources.region) ||
+      resources.region.length === 0
+    ) {
+      return null;
+    }
+    return {
+      ...common,
+      funding: "organization",
+      fundingStatus: value.fundingStatus,
+      size: "default",
+      deletionScheduledAt: null,
+      plan: null,
+      interval: null,
+      currency: null,
+      resources: {
+        provider: "digitalocean",
+        vcpu: resources.vcpu,
+        memoryGb: resources.memoryGb,
+        diskGb: resources.diskGb,
+        region: resources.region,
+      },
+    };
+  }
+  if (
+    (value.funding !== undefined && value.funding !== "stripe") ||
+    !isOneOf(BILLING_PLAN_IDS, value.plan) ||
+    !isOneOf(BILLING_INTERVALS, value.interval) ||
+    !isOneOf(BILLING_CURRENCIES, value.currency)
+  ) {
+    return null;
+  }
   return {
+    ...common,
+    funding: "stripe",
     deletionScheduledAt:
       typeof value.deletionScheduledAt === "number" &&
       Number.isSafeInteger(value.deletionScheduledAt) &&
       value.deletionScheduledAt > 0
         ? value.deletionScheduledAt
         : null,
-    serverId: value.serverId,
-    name: value.name,
-    size: value.size,
     plan: value.plan,
     interval: value.interval,
     currency: value.currency,
-    state,
-    error,
-    createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
   };
 }
 
@@ -195,7 +273,10 @@ export function parseHostedServerStatus(value: unknown): HostedServerStatus | nu
     !isString(value.serverId) ||
     !isString(value.state) ||
     !(value.error === null || isString(value.error)) ||
-    !isBoolean(value.sleeping)
+    !isBoolean(value.sleeping) ||
+    (value.funding !== undefined && value.funding !== "stripe" && value.funding !== "organization") ||
+    (value.fundingStatus !== undefined && value.fundingStatus !== "active" && value.fundingStatus !== "revoked") ||
+    (value.fundingStatus !== undefined && value.funding !== "organization")
   ) {
     return null;
   }
@@ -203,7 +284,14 @@ export function parseHostedServerStatus(value: unknown): HostedServerStatus | nu
   const state: HostedServerState = isHostedServerState(value.state) ? value.state : "error";
   const error: HostedServerError | null =
     state !== value.state ? "provider_error" : isOneOf(HOSTED_SERVER_ERRORS, value.error) ? value.error : null;
-  return { serverId: value.serverId, state, error, sleeping: value.sleeping };
+  return {
+    serverId: value.serverId,
+    state,
+    error,
+    sleeping: value.sleeping,
+    ...(value.funding === undefined ? {} : { funding: value.funding }),
+    ...(value.fundingStatus === undefined ? {} : { fundingStatus: value.fundingStatus }),
+  };
 }
 
 /**

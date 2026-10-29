@@ -4,9 +4,8 @@ import type { messages as source } from "../../en/error/billing";
 export const messages = {
   "error.billing.lifecycleFailed": "无法更改服务器套餐，请刷新账单后重试。",
   "error.billing.confirmMismatch": "请输入服务器名称以确认删除。",
-  "error.billing.restartBusy": "服务器当前无法重启，请一分钟后再试。",
-  "error.billing.planRequired": "该服务器的套餐已结束，请续费后启动服务器。",
-  "error.billing.planSoldOut": "该套餐已售罄，请选择其他套餐。",
+  "error.billing.organizationManaged": "该主机由管理员管理。不提供结账和套餐更改功能。",
+  "error.billing.fundingRevoked": "组织资助未启用。请让管理员恢复资助后再启动该服务器。",
   // License errors.
   "error.billing.licenseExists": "该账号已有许可证，请改为更改其用户数。",
   "error.billing.licenseCurrency": "许可证必须使用你其他套餐的币种。",

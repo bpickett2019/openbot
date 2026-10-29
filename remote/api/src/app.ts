@@ -151,15 +151,21 @@ export function createRemoteApiApp(
         set.status = 400;
         return { error: { code: "invalid_event", message: "The auth event is invalid." } };
       }
-      if (event.type === "remote-auth-changed") signal.revoke(event.hostId, event.authEpoch);
-      else if (event.type === "account-profile-changed") signal.profileChanged(event.userId);
+      if (event.type === "remote-auth-changed" || event.type === "remote-session-ended") {
+        const revocation =
+          event.type === "remote-auth-changed"
+            ? signal.revoke(event.hostId, event.authEpoch)
+            : signal.revokeSession(event.sessionId);
+        const result = await runtime.runPromise(revocation.pipe(Effect.result));
+        // Local access is already denied. A 503 asks the account outbox to retry unfinished TURN revocation.
+        if (Result.isFailure(result)) return emptyResponse(503);
+      } else if (event.type === "account-profile-changed") signal.profileChanged(event.userId);
       else if (event.type === "account-servers-changed") signal.serversChanged(event.userId);
       else if (event.type === "slack-route-revoked") signal.revokeSlackRoute(event.appId, event.teamId, event.through);
       else if (event.type === "telegram-route-revoked")
         signal.revokeTelegramRoute(event.botId, event.chatId, event.through);
       else if (event.type === "discord-route-revoked") signal.revokeDiscordRoute(event.guildId, event.through);
       else if (event.type === "webhook-route-revoked") signal.revokeWebhookRoute(event.routeId, event.through);
-      else signal.revokeSession(event.sessionId);
       return new Response(null, { status: 204 });
     })
     // The OpenBot Slack app's one request URL, for the events and button presses of every
@@ -356,6 +362,11 @@ export function createRemoteApiApp(
       { parse: "none" },
     )
     .ws("/v1/signal", {
+      beforeHandle({ request }) {
+        const origin = request.headers.get("origin");
+        // Native peers have no Origin. A browser must name the configured account application.
+        if (origin !== null && !config.allowedOrigins.includes(origin)) return emptyResponse(403);
+      },
       idleTimeout: 120,
       maxPayloadLength: 64 * 1024,
       backpressureLimit: 256 * 1024,

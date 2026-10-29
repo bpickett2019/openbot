@@ -139,7 +139,8 @@ export function createSettingsHostedServersStore(props: HostedServersStoreProps,
 
   async function wake(server: HostedServerSummary): Promise<void> {
     const api = props.hostedServersApi;
-    if (!api || panel.wakingServerId) return;
+    if (!api || panel.wakingServerId || (server.funding === "organization" && server.fundingStatus === "revoked"))
+      return;
     setPanel((state) => {
       state.wakingServerId = server.serverId;
       state.error = null;
@@ -167,7 +168,7 @@ export function createSettingsHostedServersStore(props: HostedServersStoreProps,
    */
   async function openCheckout(server: HostedServerSummary): Promise<void> {
     const api = props.hostedServersApi;
-    if (!api || panel.checkoutServerId) return;
+    if (!api || panel.checkoutServerId || server.funding !== "stripe") return;
     setPanel((state) => {
       state.checkoutServerId = server.serverId;
       state.error = null;

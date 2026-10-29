@@ -1,23 +1,14 @@
 /**
- * End-to-end check of the hosted server plan flows against the Stripe sandbox and a local account Worker.
+ * End-to-end check of Stripe plans and commercial licenses against the Stripe sandbox and an account Worker.
  * Each scenario gets its own account and a Stripe test clock, so renewals and period ends happen at once.
- * A subscription made here with the server metadata stands for a paid Checkout page: the Worker reads
- * only the subscription webhooks. Local development data only. On the `test` Worker each paid server is
- * a real boat VM, so the check deletes the servers of each scenario when it ends.
+ * Server-plan fixtures are self-hosted Remote hosts. Subscription webhooks update billing without
+ * provisioning provider resources.
  *
  *   bun scripts/stripe-flows-e2e.ts --api http://127.0.0.1:<port> [scenario ...]
  *
- * The Worker must run with `HOSTED_SERVERS_ALLOWED_USER_IDS` set to the IDs that `--print-user-ids`
- * prints, and `stripe listen` must forward to it. The `portal` scenario prints two Customer Portal
+ * `stripe listen` must forward events to the Worker. The `portal` scenario prints two Customer Portal
  * pages and waits until someone uses them. The report goes to `.openbot-build/stripe-flows-e2e.json`.
- *
- * The `boat` scenario runs only when named. It makes a real VM: the Worker needs the real `BOAT_API_KEY`
- * and `HOSTED_SERVER_TEMPLATE`, and the template must know a public origin of this Worker. It waits
- * until OpenBot in the VM redeems its claim and publishes its host. Then it keeps a focused web client
- * open with no input for 20 minutes and checks that the server stays on, waits for the idle stop
- * (about 15 minutes), starts the server, changes the plan, ends it, renews it, and deletes the server.
- * `--checkout` pays each Checkout page with a test card in the local Chrome. The web client then
- * connects to the server over Signal, and the screenshots go to `.openbot-build/`.
+ * `--checkout` pays the license Checkout page with a test card in local Chrome.
  * `--remote-d1` reads the D1 of the deployed `test` Worker; pass its origin as `--api`.
  *
  * The `license-*` scenarios check the commercial license: its tiered Price, Checkout, users, the count
@@ -30,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { BILLING_CURRENCIES, type BillingPortalRequest } from "@openbot/contracts/billing";
+import { BILLING_CURRENCIES, type BillingPortalRequest, memberLimitForPlan } from "@openbot/contracts/billing";
 import {
   LICENSE_PRICES,
   type LicenseCheckoutRequest,
@@ -51,14 +42,12 @@ const SCENARIOS = [
   "cancel-at-period-end",
   "plan-change",
   "renew",
-  "delete",
   "foreign",
   "customer-deleted",
   "refund",
   "dispute",
   "portal",
   "welcome",
-  "boat",
   "license-buy",
   "license-checkout",
   "license-double-checkout",
@@ -105,31 +94,10 @@ const scheduleSchema = z.object({
   phases: z.array(z.object({ start_date: z.number(), end_date: z.number() })),
 });
 
-const rowSchema = z.object({
-  server_id: z.string(),
-  size: z.string(),
-  plan: z.string().nullable(),
-  billing_interval: z.string().nullable(),
-  currency: z.string().nullable(),
-  desired_state: z.string(),
-  observed_state: z.string(),
-  observed_error: z.string().nullable(),
-  provider_sandbox_id: z.string().nullable(),
-  checkout_session_id: z.string().nullable(),
-  last_active_at: z.number().nullable(),
-  deleted_at: z.number().nullable(),
-});
-type Row = z.infer<typeof rowSchema>;
-
-const createdSchema = z.object({ server: z.object({ serverId: z.string() }), checkoutUrl: z.string().nullable() });
-const checkoutSchema = z.object({ checkoutUrl: z.string().nullable() });
-const serverListSchema = z.object({
-  servers: z.array(z.object({ serverId: z.string(), name: z.string(), state: z.string() })),
-});
-const sandboxIdSchema = z.object({ provider_sandbox_id: z.string() });
 const planSchema = z.object({
   subscriptionId: z.string(),
   plan: z.string(),
+  interval: z.string(),
   status: z.string(),
   currentPeriodEnd: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
@@ -137,13 +105,6 @@ const planSchema = z.object({
 type Plan = z.infer<typeof planSchema>;
 const billingSchema = z.object({ servers: z.array(planSchema) });
 const errorSchema = z.object({ error: z.object({ code: z.string() }) });
-const hostSchema = z.object({
-  claim_redeemed_at: z.number().nullable(),
-  host_name: z.string().nullable(),
-  published: z.number(),
-});
-const commandSchema = z.object({ exitCode: z.number().nullable().optional(), stdout: z.string().optional() });
-const sandboxSchema = z.object({ sandbox: z.object({ state: z.string(), type: z.string().optional() }) });
 const portalSchema = z.object({ url: z.string() });
 const invoicePaymentsSchema = z.object({
   data: z.array(z.object({ payment: z.object({ payment_intent: z.string().nullable().optional() }) })),
@@ -200,8 +161,6 @@ const checkoutLinesSchema = z.object({
 
 /** The request bodies of the browser API routes that this check calls. */
 type BrowserApiBody =
-  | { name: string; plan: "standard"; interval: "month"; currency: "eur" }
-  | { confirmName: string }
   | BillingPortalRequest
   | LicenseCheckoutRequest
   | LicenseUsersRequest
@@ -245,32 +204,11 @@ async function stripe<T>(
   return schema.parse(value);
 }
 
-/** The `boat` scenario only. The shared development key reads the VM of the test server. */
-async function boat(
-  method: "GET" | "POST" | "DELETE",
-  path: string,
-  body?: { command: string; timeoutSeconds: number },
-) {
-  const key = process.env.BOAT_API_KEY ?? "";
-  if (!key.startsWith("boat_")) throw new Error("BOAT_API_KEY must be the development boat key.");
-  const response = await fetch(`https://boat.dev/api/v1${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${key}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      // boat deletes a sandbox only when this header names it.
-      ...(method === "DELETE" ? { "X-Ascii-Confirm-Delete": path.split("/").at(-1) ?? "" } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  return { status: response.status, body: z.unknown().parse(await response.json().catch(() => null)) };
-}
-
 const d1ResultSchema = z.array(z.object({ results: z.array(z.unknown()) }));
 
 /** `--remote-d1` reads the D1 of the deployed `test` Worker. Wrangler then uses its own sign-in, not the API token. */
 const REMOTE_D1 = process.argv.includes("--remote-d1");
-/** `--checkout` pays the boat server on the real Checkout page with a test card, in the local Chrome. */
+/** `--checkout` pays the license on the real Checkout page with a test card, in local Chrome. */
 const REAL_CHECKOUT = process.argv.includes("--checkout");
 
 function d1<T>(sql: string, schema: z.ZodType<T>): T[] {
@@ -314,19 +252,14 @@ class Account {
     const now = Date.now();
     const hash = createHash("sha256").update(this.token).digest("base64url");
     const id = quote(this.id);
-    // A run that stopped early can leave a VM. Delete it before its row, so that no VM stays without a row.
-    const left = d1(
-      `SELECT provider_sandbox_id FROM hosted_servers
-       WHERE owner_user_id = ${id} AND provider_sandbox_id IS NOT NULL AND deleted_at IS NULL`,
-      sandboxIdSchema,
+    const hosted = d1(
+      `SELECT server_id FROM hosted_servers WHERE owner_user_id = ${id}`,
+      z.object({ server_id: z.string() }),
     );
-    for (const row of left) {
-      const { status } = await boat("DELETE", `/sandboxes/${row.provider_sandbox_id}`);
-      if (status >= 300 && status !== 404) throw new Error(`boat did not delete the VM that a run left: ${status}.`);
-    }
+    if (hosted.length > 0)
+      throw new Error("This test account has hosted server records. Migrate them before this run.");
     d1(
       [
-        `DELETE FROM hosted_servers WHERE owner_user_id = ${id}`,
         `DELETE FROM billing_subscriptions WHERE user_id = ${id}`,
         `DELETE FROM licenses WHERE user_id = ${id}`,
         // The servers and members that a license scenario adds. Deleting a host deletes its memberships.
@@ -385,31 +318,23 @@ class Account {
   }
 
   async createServer(name: string) {
-    const response = await this.request(
-      "POST",
-      "v2/hosting/servers",
-      { name, plan: "standard", interval: "month", currency: "eur" },
-      { "Idempotency-Key": `e2e-${this.scenario}-${randomBytes(8).toString("hex")}` },
+    const serverId = `e2e-${this.scenario}-${crypto.randomUUID()}`;
+    const now = Date.now();
+    d1(
+      `INSERT INTO remote_hosts(host_id, owner_user_id, name, created_at, updated_at)
+       VALUES (${quote(serverId)}, ${quote(this.id)}, ${quote(name)}, ${now}, ${now});
+       INSERT INTO remote_memberships(membership_id, host_id, user_id, role, status, created_at, updated_at)
+       VALUES (${quote(crypto.randomUUID())}, ${quote(serverId)}, ${quote(this.id)}, 'owner', 'active', ${now}, ${now})`,
+      z.unknown(),
     );
-    if (response.status !== 201) throw new Error(`create ${response.status}: ${response.code}`);
-    return createdSchema.parse(response.body);
+    return { server: { serverId } };
   }
 
-  /**
-   * Deletes the servers of this account through the Worker. On the `test` Worker a paid server is a real
-   * VM, so no VM or plan stays after the scenario.
-   */
   async tearDown() {
-    const listed = serverListSchema.safeParse((await this.request("GET", "v2/hosting/servers")).body).data;
-    for (const server of listed?.servers ?? []) {
-      if (server.state === "deleted") continue;
-      await this.request("DELETE", `v2/hosting/servers/${server.serverId}`, { confirmName: server.name });
-    }
-  }
-
-  async checkout(serverId: string) {
-    const response = await this.request("POST", `v2/hosting/servers/${serverId}/checkout`, {});
-    return { status: response.status, code: response.code, ...checkoutSchema.safeParse(response.body).data };
+    d1(
+      `DELETE FROM remote_hosts WHERE owner_user_id = ${quote(this.id)} AND host_id LIKE ${quote(`e2e-${this.scenario}-%`)}`,
+      z.unknown(),
+    );
   }
 
   async portal(flow: "cancel" | "update", subscriptionId: string) {
@@ -425,24 +350,18 @@ class Account {
     return (await this.billing()).find((entry) => entry.subscriptionId === subscriptionId) ?? null;
   }
 
-  row(serverId: string): Row | null {
-    return (
-      d1(
-        `SELECT server_id, size, plan, billing_interval, currency, desired_state, observed_state, observed_error,
-                provider_sandbox_id, checkout_session_id, last_active_at, deleted_at
-         FROM hosted_servers WHERE server_id = ${quote(serverId)}`,
-        rowSchema,
-      )[0] ?? null
-    );
+  async memberLimit(serverId: string) {
+    const response = await this.request("GET", "v2/remote/hosts");
+    const { hosts } = z
+      .object({
+        hosts: z.array(z.object({ hostId: z.string(), memberLimit: z.number() })),
+      })
+      .parse(response.body);
+    return hosts.find((host) => host.hostId === serverId)?.memberLimit;
   }
 
-  /**
-   * Pays for the server as a completed Checkout does: the open page closes, and a subscription with the
-   * server metadata starts.
-   */
+  /** Starts a real Stripe subscription with the server metadata, as a paid Checkout does. */
   async pay(serverId: string) {
-    const session = this.row(serverId)?.checkout_session_id;
-    if (session) await stripe("POST", `/v1/checkout/sessions/${session}/expire`, idSchema).catch(() => null);
     const subscription = await stripe("POST", "/v1/subscriptions", idSchema, {
       customer: this.customer,
       "items[0][price]": await priceId("standard", "month"),
@@ -576,7 +495,7 @@ class Account {
   }
 }
 
-/** The `boat` scenario only: the local Chrome, headless, for the Checkout page and the web client. */
+/** Local Chrome for the optional license Checkout payment. */
 let chrome: Promise<Browser> | null = null;
 const browser = () => {
   chrome ??= chromium.launch({
@@ -620,114 +539,6 @@ async function payCheckout(url: string, returnOrigin: string, screenshot: string
     await page.getByTestId("hosted-payment-submit-button").dispatchEvent("click");
     await page.waitForURL((current) => current.origin === returnOrigin, { timeout: 90_000 });
     return new URL(page.url()).pathname;
-  } finally {
-    await context.close();
-  }
-}
-
-// Keeps each peer connection of the page, so the check can read the selected ICE candidates.
-const PEER_TRACE = `(() => {
-  const Native = window.RTCPeerConnection;
-  window.__e2ePeers = [];
-  window.RTCPeerConnection = function (...args) {
-    const peer = new Native(...args);
-    window.__e2ePeers.push(peer);
-    return peer;
-  };
-  window.RTCPeerConnection.prototype = Native.prototype;
-})();`;
-const PEER_STATS = `(async () => {
-  const peers = [];
-  for (const peer of window.__e2ePeers ?? []) {
-    const stats = await peer.getStats();
-    let pair = null;
-    stats.forEach((entry) => {
-      if (entry.type === "transport" && entry.selectedCandidatePairId) pair = stats.get(entry.selectedCandidatePairId);
-    });
-    peers.push({
-      state: peer.connectionState,
-      local: pair ? (stats.get(pair.localCandidateId)?.candidateType ?? null) : null,
-      remote: pair ? (stats.get(pair.remoteCandidateId)?.candidateType ?? null) : null,
-      iceServers: (peer.getConfiguration().iceServers ?? []).flatMap((server) =>
-        [].concat(server.urls).map((url) => url.split("?")[0])),
-    });
-  }
-  return peers;
-})()`;
-const peersSchema = z.array(
-  z.object({
-    state: z.string(),
-    local: z.string().nullable(),
-    remote: z.string().nullable(),
-    iceServers: z.array(z.string()),
-  }),
-);
-
-/**
- * Opens the web client as the account, waits until it shows the server and a peer connection is
- * connected, and then waits for the server's next activity report. With `holdMs`, it keeps the focused
- * page open with no input for that long and reads the server row each minute. Closing the page ends the use.
- */
-async function connectWeb(account: Account, serverId: string, name: string, screenshot: string, holdMs = 0) {
-  const context = await (await browser()).newContext();
-  try {
-    await context.addCookies([
-      { name: "__Host-openbot-web", value: account.token, url: `${account.api}/`, secure: true, httpOnly: true },
-    ]);
-    await context.addInitScript(PEER_TRACE);
-    const page = await context.newPage();
-    const consoleLines: string[] = [];
-    page.on("console", (message) => {
-      if (message.type() === "error" || message.type() === "warning") consoleLines.push(message.text());
-    });
-    const start = Date.now();
-    await page.goto(`${account.api}/app`);
-    const fail = async (error: unknown) => {
-      await page.screenshot({ path: join(ROOT, ".openbot-build", `failed-${screenshot}`), fullPage: true });
-      const snapshot = await page.locator("body").ariaSnapshot();
-      process.stdout.write(`page: ${page.url()}\n${snapshot}\nconsole:\n${consoleLines.join("\n")}\n`);
-      throw error;
-    };
-    // The rail names the button "{name} server", followed by its status labels.
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    const label = new RegExp(`^${escaped} server(,|$)`, "u");
-    await page.getByRole("button", { name: label }).waitFor({ timeout: 180_000 }).catch(fail);
-    const peers = await waitFor(
-      "peer connected",
-      async () => {
-        const list = peersSchema.parse(await page.evaluate(PEER_STATS));
-        return list.some((peer) => peer.state === "connected") ? list : null;
-      },
-      120_000,
-    ).catch(fail);
-    const connectedAt = Date.now();
-    await page.screenshot({ path: join(ROOT, ".openbot-build", screenshot) });
-    const reported = await waitFor(
-      "activity report",
-      async () => {
-        const row = account.row(serverId);
-        return row?.last_active_at && row.last_active_at >= connectedAt ? row.last_active_at : null;
-      },
-      180_000,
-    ).catch(() => null);
-    const held: { atMinute: number; desiredState: string | null; lastActiveAt: number | null; focused: boolean }[] = [];
-    if (holdMs > 0) await page.bringToFront();
-    while (Date.now() - connectedAt < holdMs) {
-      await sleep(60_000);
-      const row = account.row(serverId);
-      held.push({
-        atMinute: Math.round((Date.now() - connectedAt) / 60_000),
-        desiredState: row?.desired_state ?? null,
-        lastActiveAt: row?.last_active_at ?? null,
-        focused: await page.evaluate(() => !document.hidden && document.hasFocus()),
-      });
-    }
-    return {
-      connectMs: connectedAt - start,
-      peers,
-      activityReportedAfterMs: reported ? reported - connectedAt : null,
-      held,
-    };
   } finally {
     await context.close();
   }
@@ -829,25 +640,6 @@ function record(scenario: Scenario, step: string, pass: boolean, evidence: unkno
   print(`${pass ? "PASS" : "FAIL"} [${scenario}] ${step}`);
 }
 
-/** The row once the Worker applied the paid plan. With a fake boat key the provision ends in a provider error. */
-function provisioned(account: Account, serverId: string) {
-  return waitFor("provisioned", async () => {
-    const row = account.row(serverId);
-    return row && row.observed_state !== "awaiting_payment" && row.observed_state !== "creating" ? row : null;
-  });
-}
-
-function rowWhere(account: Account, serverId: string, label: string, test: (row: Row) => boolean, timeoutMs?: number) {
-  return waitFor(
-    label,
-    async () => {
-      const row = account.row(serverId);
-      return row && test(row) ? row : null;
-    },
-    timeoutMs,
-  );
-}
-
 /** The claim that the Worker records when it sends the welcome email of an account. */
 function welcomeClaims(account: Account) {
   return d1(
@@ -857,28 +649,21 @@ function welcomeClaims(account: Account) {
   );
 }
 
-const observabilitySchema = z.object({ result: z.object({ rows: z.array(z.tuple([z.string()])) }) });
-
-/**
- * The welcome email results that a local Worker logged since `since`: one line for each send. Only
- * `bun run dev:api` has this log query, so `--remote-d1` reads nothing.
- */
-async function welcomeSends(api: string, since: number) {
-  const response = await fetch(`${api}/cdn-cgi/local/explorer/api/local/observability/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sql: `SELECT message FROM logs WHERE message LIKE '%billing: welcome email%' AND ts_ms >= ${since}`,
-    }),
-  });
-  return observabilitySchema.parse(await response.json()).result.rows.map(([message]) => message);
-}
-
-function planWhere(account: Account, subscriptionId: string, label: string, test: (plan: Plan) => boolean) {
-  return waitFor(label, async () => {
-    const plan = await account.plan(subscriptionId);
-    return plan && test(plan) ? plan : null;
-  });
+function planWhere(
+  account: Account,
+  subscriptionId: string,
+  label: string,
+  test: (plan: Plan) => boolean,
+  timeoutMs?: number,
+) {
+  return waitFor(
+    label,
+    async () => {
+      const plan = await account.plan(subscriptionId);
+      return plan && test(plan) ? plan : null;
+    },
+    timeoutMs,
+  );
 }
 
 const welcomeClaimSchema = z.object({ event_id: z.string(), type: z.string(), received_at: z.number() });
@@ -936,12 +721,13 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
   async renewal(account) {
     const { server } = await account.createServer("Renewal");
     const sub = await account.pay(server.serverId);
-    const row = await provisioned(account, server.serverId);
     const before = await planWhere(account, sub, "plan", () => true);
-    record("renewal", "payment opens the plan and provisions the server", row.desired_state === "running", {
-      row,
+    record(
+      "renewal",
+      "payment opens the plan and grants its member limit",
+      before.status === "active" && (await account.memberLimit(server.serverId)) === memberLimitForPlan("standard"),
       before,
-    });
+    );
     await account.advance(32);
     const after = await planWhere(
       account,
@@ -949,41 +735,29 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       "renewed period",
       (plan) => (plan.currentPeriodEnd ?? 0) > (before.currentPeriodEnd ?? 0),
     );
-    const rowAfter = account.row(server.serverId);
-    record(
-      "renewal",
-      "a paid renewal moves the period end, and the server keeps running",
-      after.status === "active" && rowAfter?.desired_state === "running" && rowAfter.observed_error !== "plan_ended",
-      { before: before.currentPeriodEnd, after: after.currentPeriodEnd, status: after.status, row: rowAfter },
-    );
+    record("renewal", "a paid renewal moves the period end and keeps the plan active", after.status === "active", {
+      before: before.currentPeriodEnd,
+      after: after.currentPeriodEnd,
+      status: after.status,
+    });
   },
 
   async "failed-renewal"(account) {
     const { server } = await account.createServer("Failed renewal");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
     const before = await planWhere(account, sub, "plan", () => true);
     await account.useCard("pm_card_chargeCustomerFail");
     const renewalAt = await account.advance(32);
     const pastDue = await planWhere(account, sub, "past_due", (plan) => plan.status === "past_due");
-    const graceRow = account.row(server.serverId);
     record(
       "failed-renewal",
-      "a failed renewal makes the plan past_due; the server keeps running while Stripe retries",
-      graceRow?.desired_state === "running",
+      "a failed renewal makes the plan past_due while Stripe retries",
+      pastDue.status === "past_due",
       {
         periodEndBefore: before.currentPeriodEnd,
         periodEndAfterFailure: pastDue.currentPeriodEnd,
         renewalAt: renewalAt * 1_000,
-        row: graceRow,
       },
-    );
-    const renewWhileDue = await account.checkout(server.serverId);
-    record(
-      "failed-renewal",
-      "a past_due server gets no second Checkout",
-      renewWhileDue.status === 200 && renewWhileDue.checkoutUrl === null,
-      renewWhileDue,
     );
     // The user pays the open invoice with a working card, as in the Customer Portal.
     const good = await account.useCard("pm_card_visa");
@@ -1003,28 +777,23 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       statuses.push({ afterDays: days, stripeStatus });
       if (stripeStatus === "canceled" || stripeStatus === "unpaid") final = stripeStatus;
     }
-    const ended = final
-      ? await rowWhere(account, server.serverId, "plan ended", (row) => row.desired_state === "stopped")
-      : null;
-    record(
-      "failed-renewal",
-      "when Stripe stops the retries, the server stops with plan_ended and is kept",
-      ended?.observed_error === "plan_ended" && ended.deleted_at === null,
-      { statuses, final, row: ended },
-    );
-    const renew = await account.checkout(server.serverId);
-    record(
-      "failed-renewal",
-      "renew: 409 payment_due while an unpaid plan is open, else a new Checkout",
-      renew.status === (final === "unpaid" ? 409 : 200),
-      { status: renew.status, code: renew.code, hasUrl: Boolean(renew.checkoutUrl) },
-    );
+    const ended =
+      final === "unpaid"
+        ? await planWhere(account, sub, "unpaid plan", (plan) => plan.status === "unpaid")
+        : final === "canceled"
+          ? await waitFor("canceled plan hidden", async () => !(await account.plan(sub)))
+          : null;
+    record("failed-renewal", "when Stripe stops the retries, billing records the terminal state", ended !== null, {
+      statuses,
+      final,
+      ended,
+    });
   },
 
   async "cancel-at-period-end"(account) {
     const { server } = await account.createServer("Cancel later");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
+    await planWhere(account, sub, "plan", () => true);
     const portal = await account.portal("cancel", sub);
     record("cancel-at-period-end", "the Worker gives a Portal cancel page", portal.status === 200, {
       host: portal.url ? new URL(portal.url).host : null,
@@ -1032,12 +801,11 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     // The Portal with mode `at_period_end` makes the same change.
     await stripe("POST", `/v1/subscriptions/${sub}`, idSchema, { cancel_at_period_end: "true" });
     const cancelling = await planWhere(account, sub, "cancelAtPeriodEnd", (plan) => plan.cancelAtPeriodEnd);
-    const row = account.row(server.serverId);
     record(
       "cancel-at-period-end",
-      "cancel at period end: the plan shows the end date and the server keeps running",
-      row?.desired_state === "running",
-      { plan: cancelling, row },
+      "cancel at period end: the active plan shows the end date",
+      cancelling.status === "active" && cancelling.currentPeriodEnd !== null,
+      cancelling,
     );
     await stripe("POST", `/v1/subscriptions/${sub}`, idSchema, { cancel_at_period_end: "false" });
     const undone = await planWhere(account, sub, "undo", (plan) => !plan.cancelAtPeriodEnd);
@@ -1049,19 +817,19 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     const scheduled = await planWhere(account, sub, "cancel_at", (plan) => plan.cancelAtPeriodEnd);
     record("cancel-at-period-end", "a cancel with `cancel_at` also shows the end date", true, scheduled);
     await account.advance(32);
-    const ended = await rowWhere(account, server.serverId, "stopped", (current) => current.desired_state === "stopped");
+    await waitFor("canceled plan hidden", async () => !(await account.plan(sub)));
     record(
       "cancel-at-period-end",
-      "at the period end the server stops with plan_ended; the row and its data stay",
-      ended.observed_error === "plan_ended" && ended.deleted_at === null,
-      { stripeStatus: (await subscription(sub)).status, row: ended, billingPlans: await account.billing() },
+      "at the period end the canceled plan leaves the open billing state",
+      (await subscription(sub)).status === "canceled",
+      { stripeStatus: (await subscription(sub)).status, billingPlans: await account.billing() },
     );
   },
 
   async "plan-change"(account) {
     const { server } = await account.createServer("Plan change");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
+    await planWhere(account, sub, "plan", () => true);
     const item = (await subscription(sub)).items.data[0]?.id;
     if (!item) throw new Error("No subscription item");
     // The Portal upgrade: a higher price now, charged now (`always_invoice`).
@@ -1070,20 +838,20 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       "items[0][price]": await priceId("pro", "month"),
       proration_behavior: "always_invoice",
     });
-    const upgraded = await rowWhere(account, server.serverId, "pro", (row) => row.plan === "pro");
+    const upgraded = await planWhere(account, sub, "pro", (plan) => plan.plan === "pro");
     record(
       "plan-change",
       "upgrade to Pro: the server plan follows; the prorated amount is invoiced at once",
-      (await account.plan(sub))?.plan === "pro",
-      { row: upgraded, invoices: await invoices(sub) },
+      upgraded.plan === "pro" && (await account.memberLimit(server.serverId)) === memberLimitForPlan("pro"),
+      { plan: upgraded, invoices: await invoices(sub) },
     );
     await stripe("POST", `/v1/subscriptions/${sub}`, idSchema, {
       "items[0][id]": item,
       "items[0][price]": await priceId("pro", "year"),
       proration_behavior: "always_invoice",
     });
-    const yearly = await rowWhere(account, server.serverId, "yearly", (row) => row.billing_interval === "year");
-    record("plan-change", "month to year: the server interval follows", yearly.plan === "pro", yearly);
+    const yearly = await planWhere(account, sub, "yearly", (plan) => plan.interval === "year");
+    record("plan-change", "month to year: the billing interval follows", yearly.plan === "pro", yearly);
     // The Portal downgrade: a schedule changes the price at the period end.
     const schedule = await stripe("POST", "/v1/subscription_schedules", scheduleSchema, { from_subscription: sub });
     const phase = schedule.phases[0];
@@ -1095,8 +863,7 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       "phases[1][items][0][price]": await priceId("standard", "year"),
       end_behavior: "release",
     });
-    await sleep(5_000);
-    const beforeEnd = account.row(server.serverId);
+    const beforeEnd = await account.plan(sub);
     record(
       "plan-change",
       "a downgrade waits for the period end: the server stays Pro",
@@ -1104,11 +871,11 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       beforeEnd,
     );
     await account.advance(370);
-    const downgraded = await rowWhere(account, server.serverId, "standard", (row) => row.plan === "standard", 120_000);
+    const downgraded = await planWhere(account, sub, "standard", (plan) => plan.plan === "standard", 120_000);
     record(
       "plan-change",
-      "after the period end the server plan is Standard and it keeps running",
-      downgraded.desired_state === "running",
+      "after the period end the plan is Standard and stays active",
+      downgraded.status === "active",
       downgraded,
     );
   },
@@ -1116,81 +883,26 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
   async renew(account) {
     const { server } = await account.createServer("Renew plan");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
+    await planWhere(account, sub, "plan", () => true);
     await stripe("DELETE", `/v1/subscriptions/${sub}`, idSchema);
-    const ended = await rowWhere(account, server.serverId, "ended", (row) => row.desired_state === "stopped");
-    record("renew", "a cancel now stops the server with plan_ended", ended.observed_error === "plan_ended", ended);
-    const woken = await account.request("POST", `v2/hosting/servers/${server.serverId}/wake`, {});
-    record("renew", "start of a server whose plan ended: 402 plan_required", woken.status === 402, {
-      status: woken.status,
-      code: woken.code,
-    });
-    const renew = await account.checkout(server.serverId);
+    await waitFor("canceled plan hidden", async () => !(await account.plan(sub)));
     record(
       "renew",
-      "renew gives a new Checkout page",
-      renew.status === 200 && Boolean(renew.checkoutUrl?.startsWith("https://checkout.stripe.com/")),
-      { status: renew.status },
+      "a canceled plan leaves the open billing state",
+      (await account.plan(sub)) === null,
+      await account.billing(),
     );
-    await account.pay(server.serverId);
-    const renewed = await rowWhere(
-      account,
-      server.serverId,
-      "running again",
-      (row) =>
-        row.desired_state === "running" &&
-        row.observed_state !== "awaiting_payment" &&
-        row.observed_state !== "creating",
-    );
-    record(
-      "renew",
-      "a paid renewal of a server with no sandbox sets it up again (no payment for a server that cannot start)",
-      renewed.observed_error !== "plan_ended",
-      renewed,
-    );
-  },
-
-  async delete(account) {
-    const { server } = await account.createServer("Delete paid");
-    const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
-    const deleted = await account.request("DELETE", `v2/hosting/servers/${server.serverId}`, {
-      confirmName: "Delete paid",
-    });
-    const stripeSub = await subscription(sub);
-    record(
-      "delete",
-      "delete of a paid server cancels its plan now, with no refund",
-      deleted.status === 204 && stripeSub.status === "canceled",
-      { status: deleted.status, stripeStatus: stripeSub.status, row: account.row(server.serverId) },
-    );
-    const unpaid = await account.createServer("Delete unpaid");
-    const session = account.row(unpaid.server.serverId)?.checkout_session_id;
-    if (!session) throw new Error("No Checkout page");
-    const removed = await account.request("DELETE", `v2/hosting/servers/${unpaid.server.serverId}`, {
-      confirmName: "Delete unpaid",
-    });
-    const page = await stripe("GET", `/v1/checkout/sessions/${session}`, checkoutSessionSchema);
-    record(
-      "delete",
-      "delete of an unpaid server closes its Checkout page",
-      removed.status === 204 && page.status === "expired",
-      { status: removed.status, page: page.status },
-    );
-    // A payment that arrives after the delete (a page paid at the same moment) is cancelled.
-    const late = await account.pay(unpaid.server.serverId);
-    await waitFor("late cancelled", async () => (await subscription(late)).status === "canceled");
-    record("delete", "a payment for a deleted server is cancelled at once", true, {
-      row: account.row(unpaid.server.serverId),
-    });
+    const replacement = await account.pay(server.serverId);
+    const renewed = await planWhere(account, replacement, "replacement active", (plan) => plan.status === "active");
+    record("renew", "a replacement subscription restores the server plan", renewed.subscriptionId !== sub, renewed);
   },
 
   async foreign(account) {
     const victim = await new Account("renewal", account.api).setUp();
     const { server } = await victim.createServer("Victim");
     const sub = await account.pay(server.serverId);
-    await sleep(8_000);
-    const row = victim.row(server.serverId);
+    await planWhere(account, sub, "foreign plan stored", () => true);
+    const memberLimit = await victim.memberLimit(server.serverId);
     const stored = d1(
       `SELECT user_id, server_id, status FROM billing_subscriptions WHERE stripe_subscription_id = ${quote(sub)}`,
       z.unknown(),
@@ -1198,8 +910,8 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     record(
       "foreign",
       "a subscription whose metadata names another account's server gives that server nothing",
-      row?.observed_state === "awaiting_payment" && (await victim.billing()).length === 0,
-      { row, stored },
+      memberLimit === memberLimitForPlan(null) && (await victim.billing()).length === 0,
+      { memberLimit, stored },
     );
     await stripe("DELETE", `/v1/subscriptions/${sub}`, idSchema);
     await victim.tearDown();
@@ -1210,7 +922,7 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
   async portal(account) {
     const { server } = await account.createServer("Portal");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
+    await planWhere(account, sub, "plan", () => true);
     print(`PORTAL_CANCEL ${(await account.portal("cancel", sub)).url}`);
     const cancelled = await waitFor(
       "Portal cancel",
@@ -1224,7 +936,7 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     record(
       "portal",
       "Portal cancel: the plan shows the end date",
-      account.row(server.serverId)?.desired_state === "running",
+      cancelled.status === "active" && cancelled.currentPeriodEnd !== null,
       { plan: cancelled, stripe: { cancel_at_period_end: stored.cancel_at_period_end, cancel_at: stored.cancel_at } },
     );
     await stripe(
@@ -1235,15 +947,9 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     );
     await planWhere(account, sub, "undo", (plan) => !plan.cancelAtPeriodEnd);
     print(`PORTAL_UPDATE ${(await account.portal("update", sub)).url}`);
-    const upgraded = await rowWhere(
-      account,
-      server.serverId,
-      "Portal upgrade",
-      (row) => row.plan !== "standard",
-      600_000,
-    );
+    const upgraded = await planWhere(account, sub, "Portal upgrade", (plan) => plan.plan !== "standard", 600_000);
     record("portal", "Portal plan change: the server plan follows, and an upgrade is invoiced at once", true, {
-      row: upgraded,
+      plan: upgraded,
       invoices: await invoices(sub),
     });
   },
@@ -1251,50 +957,44 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
   async "customer-deleted"(account) {
     const old = account.customer;
     await stripe("DELETE", `/v1/customers/${old}`, idSchema);
-    const created = await account.createServer("After delete");
+    const created = await account.request("POST", "v1/me/license/checkout", { users: 5, currency: "eur" });
+    const { url } = licenseCheckoutSchema.parse(created.body);
     const [stored] = d1(
       `SELECT stripe_customer_id FROM billing_customers WHERE user_id = ${quote(account.id)}`,
       z.object({ stripe_customer_id: z.string() }),
     );
-    const session = account.row(created.server.serverId)?.checkout_session_id;
-    if (!session) throw new Error("No Checkout page");
-    const page = await stripe("GET", `/v1/checkout/sessions/${session}`, checkoutSessionSchema);
+    const page = await stripe("GET", `/v1/checkout/sessions/${checkoutSessionId(url)}`, checkoutSessionSchema);
     record(
       "customer-deleted",
       "a customer deleted in Stripe: the next Checkout uses a new customer",
-      Boolean(created.checkoutUrl) &&
-        stored?.stripe_customer_id !== old &&
-        page.customer === stored?.stripe_customer_id,
+      created.status === 200 && stored?.stripe_customer_id !== old && page.customer === stored?.stripe_customer_id,
       { oldReplaced: stored?.stripe_customer_id !== old },
     );
+    await expireCheckout(url);
   },
   async refund(account) {
     // A partial refund keeps the plan. The second refund makes the payment refunded in full and ends it.
     const { server } = await account.createServer("Refund");
     const sub = await account.pay(server.serverId);
-    await provisioned(account, server.serverId);
+    await planWhere(account, sub, "plan", () => true);
     const paid = await paymentIntent(sub);
     const sales = await recordsSales(paid.invoice);
     const partial = await stripe("POST", "/v1/refunds", refundSchema, { payment_intent: paid.intent, amount: "100" });
     await applied("refund.created", partial.id);
     const plan = await account.plan(sub);
-    const row = account.row(server.serverId);
-    record(
-      "refund",
-      "a partial refund keeps the plan and the server",
-      plan?.status === "active" && row?.desired_state === "running" && row.observed_error !== "plan_ended",
-      { refund: partial.status, plan, row },
-    );
+    record("refund", "a partial refund keeps the plan active", plan?.status === "active", {
+      refund: partial.status,
+      plan,
+    });
     const rest = await stripe("POST", "/v1/refunds", refundSchema, { payment_intent: paid.intent });
     await applied("refund.created", rest.id);
-    const ended = await rowWhere(account, server.serverId, "plan ended", (row) => row.desired_state === "stopped");
+    await waitFor("refunded plan hidden", async () => !(await account.plan(sub)));
     const stripeSub = await subscription(sub);
-    record(
-      "refund",
-      "a full refund of the current invoice cancels the plan now; the server stops with plan_ended and is kept",
-      stripeSub.status === "canceled" && ended.observed_error === "plan_ended" && ended.deleted_at === null,
-      { refund: rest.status, stripeStatus: stripeSub.status, row: ended },
-    );
+    record("refund", "a full refund of the current invoice cancels the plan now", stripeSub.status === "canceled", {
+      refund: rest.status,
+      stripeStatus: stripeSub.status,
+      plans: await account.billing(),
+    });
     if (sales) {
       const recorded = facts(paid.invoice);
       record(
@@ -1311,20 +1011,15 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     const second = await account.createServer("Refund fails");
     await account.useCard("pm_card_refundFail");
     const secondSub = await account.pay(second.server.serverId);
-    await provisioned(account, second.server.serverId);
+    await planWhere(account, secondSub, "plan", () => true);
     const secondPaid = await paymentIntent(secondSub);
     const failing = await stripe("POST", "/v1/refunds", refundSchema, {
       payment_intent: secondPaid.intent,
       amount: "100",
     });
     await applied("refund.failed", failing.id, 180_000);
-    const failedRow = account.row(second.server.serverId);
-    record(
-      "refund",
-      "a failed refund keeps the plan and the server",
-      (await account.plan(secondSub))?.status === "active" && failedRow?.desired_state === "running",
-      { row: failedRow },
-    );
+    const failedPlan = await account.plan(secondSub);
+    record("refund", "a failed refund keeps the plan active", failedPlan?.status === "active", { plan: failedPlan });
     if (sales) {
       const recorded = facts(secondPaid.invoice);
       // Stripe says this refund starts as succeeded, so both facts exist; the order of their events can vary.
@@ -1349,14 +1044,13 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
       return list.data[0] ?? null;
     });
     await applied("charge.dispute.created", disputed.id);
-    const ended = await rowWhere(account, server.serverId, "plan ended", (row) => row.desired_state === "stopped");
+    await waitFor("disputed plan hidden", async () => !(await account.plan(sub)));
     const stripeSub = await subscription(sub);
-    record(
-      "dispute",
-      "a dispute cancels the plan now; the server stops with plan_ended and is kept",
-      stripeSub.status === "canceled" && ended.observed_error === "plan_ended" && ended.deleted_at === null,
-      { dispute: disputed.status, stripeStatus: stripeSub.status, row: ended },
-    );
+    record("dispute", "a dispute cancels the plan now", stripeSub.status === "canceled", {
+      dispute: disputed.status,
+      stripeStatus: stripeSub.status,
+      plans: await account.billing(),
+    });
     // This evidence text makes the test dispute close as lost.
     await stripe("POST", `/v1/disputes/${disputed.id}`, idSchema, {
       "evidence[uncategorized_text]": "losing_evidence",
@@ -1377,14 +1071,12 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     }
   },
 
-  // The Worker claims the welcome email before it sends it, and logs one line for each send.
+  // The first server plan claims the welcome once, before the optional hosted-server email send.
   async welcome(account) {
-    const since = Date.now();
     const first = await account.createServer("Welcome");
     record("welcome", "a server that is not paid gets no welcome email", welcomeClaims(account).length === 0, null);
     const sub = await account.pay(first.server.serverId);
     await applied("customer.subscription.created", sub);
-    await provisioned(account, first.server.serverId);
     const claimed = await waitFor("welcome claim", async () => welcomeClaims(account)[0]);
     record(
       "welcome",
@@ -1395,274 +1087,18 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
     const second = await account.createServer("Welcome second");
     const secondSub = await account.pay(second.server.serverId);
     await applied("customer.subscription.created", secondSub);
-    await provisioned(account, second.server.serverId);
     await stripe("DELETE", `/v1/subscriptions/${sub}`, idSchema);
-    await rowWhere(account, first.server.serverId, "ended", (row) => row.desired_state === "stopped");
-    await account.pay(first.server.serverId);
-    await rowWhere(account, first.server.serverId, "running again", (row) => row.desired_state === "running");
-    if (REMOTE_D1) {
-      print("SKIP [welcome] send count: the remote Worker log is not available");
-      return;
-    }
-    const sends = await welcomeSends(account.api, since);
-    record("welcome", "a second server and a renewed plan send no second welcome email", sends.length === 1, sends);
+    await waitFor("canceled plan hidden", async () => !(await account.plan(sub)));
+    const renewed = await account.pay(first.server.serverId);
+    await applied("customer.subscription.created", renewed);
+    const claims = welcomeClaims(account);
+    record(
+      "welcome",
+      "a second server and a renewed plan do not replace the first welcome claim",
+      claims.length === 1 && claims[0]?.received_at === claimed.received_at,
+      claims,
+    );
   },
-  async boat(account) {
-    const name = "Boat e2e";
-    const { server, checkoutUrl } = await account.createServer(name);
-    const serverId = server.serverId;
-    let deleted = false;
-    const sandbox = async (id: string) => {
-      const response = await boat("GET", `/sandboxes/${id}`);
-      return { status: response.status, ...sandboxSchema.safeParse(response.body).data?.sandbox };
-    };
-    const openPlan = () =>
-      waitFor(
-        "subscription stored",
-        async () => {
-          const [value] = d1(
-            `SELECT stripe_subscription_id FROM billing_subscriptions
-           WHERE server_id = ${quote(serverId)} AND status IN ('active', 'trialing') ORDER BY updated_at DESC LIMIT 1`,
-            z.object({ stripe_subscription_id: z.string() }),
-          );
-          return value?.stripe_subscription_id;
-        },
-        600_000,
-      );
-    /** The real Checkout page with a test card, or a subscription with the server metadata. */
-    let pages = 0;
-    const pay = async (url: string | null | undefined) => {
-      if (!REAL_CHECKOUT) return account.pay(serverId);
-      if (!url) throw new Error("No Checkout page");
-      pages += 1;
-      const returned = await payCheckout(url, new URL(account.api).origin, `boat-e2e-checkout-${pages}.png`);
-      print(`Checkout paid; returned to ${returned}`);
-      return openPlan();
-    };
-    // The deployed Worker gets the boat webhooks and runs the cron each minute. A local Worker needs a push.
-    const tick = () =>
-      REMOTE_D1
-        ? Promise.resolve()
-        : fetch(`${account.api}/cdn-cgi/handler/scheduled?cron=*+*+*+*+*`).catch(() => null);
-    const runningRow = (label: string, test: (row: Row) => boolean = () => true, timeoutMs = 600_000) =>
-      waitFor(
-        label,
-        async () => {
-          await tick();
-          const row = account.row(serverId);
-          return row?.observed_state === "running" && row.desired_state === "running" && test(row) ? row : null;
-        },
-        timeoutMs,
-      );
-    const serviceActive = async (sandboxId: string) => {
-      const response = await boat("POST", `/sandboxes/${sandboxId}/commands`, {
-        command: "systemctl is-active openbot.service; sudo -n journalctl -u openbot.service --no-pager -n 30 -o cat",
-        timeoutSeconds: 60,
-      });
-      return commandSchema.safeParse(response.body).data?.stdout ?? "";
-    };
-    try {
-      await pay(checkoutUrl);
-      const created = await rowWhere(
-        account,
-        serverId,
-        "sandbox",
-        (row) => row.provider_sandbox_id !== null || row.observed_state === "error",
-        120_000,
-      );
-      const sandboxId = created.provider_sandbox_id;
-      record(
-        "boat",
-        `payment (${REAL_CHECKOUT ? "Checkout page, test card" : "subscription"}) creates one boat VM from the template`,
-        sandboxId !== null,
-        created,
-      );
-      if (!sandboxId) return;
-      const running = await runningRow("running");
-      record("boat", "the VM reaches running", true, running);
-      const host = await waitFor(
-        "claim redeemed and host published",
-        async () => {
-          const [value] = d1(
-            `SELECT h.claim_redeemed_at, r.name AS host_name, r.device_public_key IS NOT NULL AS published
-             FROM hosted_servers h
-             LEFT JOIN remote_hosts r ON r.host_id = h.server_id AND r.owner_user_id = h.owner_user_id
-             WHERE h.server_id = ${quote(serverId)}`,
-            hostSchema,
-          );
-          return value?.claim_redeemed_at && value.published ? value : null;
-        },
-        900_000,
-      );
-      record(
-        "boat",
-        "OpenBot in the VM redeems its claim and publishes the host with the server name",
-        host.host_name === name,
-        host,
-      );
-      const output = await serviceActive(sandboxId);
-      record("boat", "openbot.service is active in the VM", output.startsWith("active"), output.split("\n"));
-      // The claim works one time, so a server that did not store its session cannot sign in again. The
-      // app signs in before it starts the host, so 60 seconds of a clean log is a complete start.
-      const restart = await boat("POST", `/sandboxes/${sandboxId}/commands`, {
-        command: [
-          'test -s "$HOME/.config/OpenBot/openbot-central-auth-v1.bin" || { echo "no stored session"; exit 1; }',
-          "sudo -n systemctl restart openbot.service",
-          "id=$(systemctl show -p InvocationID --value openbot.service)",
-          "for _ in $(seq 1 30); do",
-          '  if sudo -n journalctl "_SYSTEMD_INVOCATION_ID=$id" -o cat --no-pager | grep -q "could not sign in"; then',
-          '    echo "sign-in failed"; exit 1',
-          "  fi",
-          "  sleep 2",
-          "done",
-          "systemctl is-active openbot.service",
-        ].join("\n"),
-        timeoutSeconds: 120,
-      });
-      const restarted = commandSchema.safeParse(restart.body).data?.stdout?.trim() ?? "";
-      record("boat", "the stored session signs the server in again after a restart", restarted === "active", {
-        output: restarted,
-      });
-
-      // The focused page sends `focus-use-v1` pings and no input. The idle stop would come after 15 to 20 minutes.
-      const web = await connectWeb(account, serverId, name, "boat-e2e-web-connected.png", 20 * 60_000);
-      record(
-        "boat",
-        "the web client connects to the server over Signal, and the server reports the use",
-        web.peers.some((peer) => peer.state === "connected") && web.activityReportedAfterMs !== null,
-        web,
-      );
-      const reports = new Set(web.held.map((sample) => sample.lastActiveAt).filter((at) => at !== null));
-      // Without focus the page sends no ping, so a failure below would not be about the server.
-      record(
-        "boat",
-        "the held web page has focus",
-        web.held.length > 0 && web.held.every((sample) => sample.focused),
-        web.held,
-      );
-      record(
-        "boat",
-        "a focused web client with no input keeps the server running for 20 minutes",
-        web.held.length > 0 && web.held.every((sample) => sample.desiredState === "running") && reports.size >= 3,
-        { reports: reports.size, held: web.held },
-      );
-
-      // The page is closed, so the server reports no use. It stops 15 minutes after its last use.
-      const idleSince = Date.now();
-      const idle = await rowWhere(
-        account,
-        serverId,
-        "idle stop",
-        (row) => row.desired_state === "idle" && row.observed_state === "stopped",
-        30 * 60_000,
-      );
-      const idleBoat = await sandbox(sandboxId);
-      record(
-        "boat",
-        "with no use for 15 minutes the server stops and boat keeps the VM",
-        idleBoat.status === 200 && idleBoat.state !== "deleted",
-        { minutes: Math.round((Date.now() - idleSince) / 6_000) / 10, row: idle, boat: idleBoat },
-      );
-      await sleep(90_000);
-      const stillIdle = account.row(serverId);
-      record(
-        "boat",
-        "the cron and the boat webhook do not start an idle server",
-        stillIdle?.desired_state === "idle" && stillIdle.observed_state === "stopped",
-        stillIdle,
-      );
-      const woken = await account.request("POST", `v2/hosting/servers/${serverId}/wake`, {});
-      const awake = await runningRow("running after wake");
-      const again = await connectWeb(account, serverId, name, "boat-e2e-web-after-wake.png");
-      record(
-        "boat",
-        "Start (wake) resumes the idle server with the same VM, and the web client connects again",
-        awake.provider_sandbox_id === sandboxId && again.peers.some((peer) => peer.state === "connected"),
-        { status: woken.status, row: awake, web: again },
-      );
-
-      // A plan change: Standard (default) to Pro (large). The server stops and resumes on the new type.
-      const sub = await openPlan();
-      const item = (await subscription(sub)).items.data[0]?.id;
-      if (!item) throw new Error("No subscription item");
-      await stripe("POST", `/v1/subscriptions/${sub}`, idSchema, {
-        "items[0][id]": item,
-        "items[0][price]": await priceId("pro", "month"),
-        proration_behavior: "always_invoice",
-      });
-      const resized = await runningRow("resized", (row) => row.size === "large");
-      const resizedBoat = await sandbox(sandboxId);
-      const resizedWeb = await connectWeb(account, serverId, name, "boat-e2e-web-after-resize.png");
-      record(
-        "boat",
-        "Standard to Pro: the server moves to the boat large type, and the web client connects again",
-        resized.plan === "pro" &&
-          resizedBoat.type === "large" &&
-          resized.provider_sandbox_id === sandboxId &&
-          resizedWeb.peers.some((peer) => peer.state === "connected"),
-        { row: resized, boat: resizedBoat, web: resizedWeb },
-      );
-
-      // The plan ends now: the server stops with plan_ended, and the VM stays.
-      await stripe("DELETE", `/v1/subscriptions/${sub}`, idSchema);
-      const ended = await rowWhere(
-        account,
-        serverId,
-        "plan ended",
-        (row) => row.desired_state === "stopped" && row.observed_state === "stopped",
-        600_000,
-      );
-      const endedBoat = await sandbox(sandboxId);
-      record(
-        "boat",
-        "cancel: the server stops with plan_ended; the row and the VM stay",
-        ended.observed_error === "plan_ended" &&
-          ended.deleted_at === null &&
-          endedBoat.status === 200 &&
-          endedBoat.state !== "deleted",
-        { row: ended, boat: endedBoat },
-      );
-      const refused = await account.request("POST", `v2/hosting/servers/${serverId}/wake`, {});
-      record("boat", "a connect to a server whose plan ended: 402 plan_required", refused.status === 402, {
-        status: refused.status,
-        code: refused.code,
-      });
-
-      // Renew: a new plan starts the same VM again.
-      const renew = await account.checkout(serverId);
-      await pay(renew.checkoutUrl);
-      const renewed = await runningRow("renewed");
-      const renewedWeb = await connectWeb(account, serverId, name, "boat-e2e-web-after-renew.png");
-      record(
-        "boat",
-        "renew: the paid plan starts the same VM again, and the web client connects",
-        renewed.provider_sandbox_id === sandboxId &&
-          renewed.observed_error === null &&
-          renewedWeb.peers.some((peer) => peer.state === "connected"),
-        { checkout: renew.status, row: renewed, web: renewedWeb },
-      );
-
-      const removed = await account.request("DELETE", `v2/hosting/servers/${serverId}`, { confirmName: name });
-      deleted = removed.status === 204;
-      const gone = await waitFor(
-        "VM deleted",
-        async () => {
-          const current = await sandbox(sandboxId);
-          return current.status === 404 || current.state === "deleted" ? current : null;
-        },
-        180_000,
-      );
-      record("boat", "delete removes the VM and cancels the plan", deleted, {
-        status: removed.status,
-        boat: gone,
-        row: account.row(serverId),
-        plans: await account.billing(),
-      });
-    } finally {
-      if (!deleted) await account.request("DELETE", `v2/hosting/servers/${serverId}`, { confirmName: name });
-    }
-  },
-
   async "license-buy"(account) {
     const price = await stripe("GET", `/v1/prices/${await priceId("license", "month")}`, licensePriceSchema, {
       "expand[0]": "tiers",
@@ -2091,51 +1527,42 @@ const scenarios: Record<Scenario, (account: Account) => Promise<void>> = {
   async "license-isolation"(account) {
     const { server } = await account.createServer("Isolation");
     const planSub = await account.pay(server.serverId);
-    const row = await provisioned(account, server.serverId);
     const planBefore = await planWhere(account, planSub, "plan", () => true);
     const claims = welcomeClaims(account).length;
     const licenseSub = await account.buyLicense(7);
     await licenseWhere(account, "license active", (state) => state.license?.status === "active");
     const plans = await account.billing();
-    const rowAfter = account.row(server.serverId);
     record(
       "license-isolation",
-      "a license next to a server plan: the plan list, the plan and the server do not change",
+      "a license next to a server plan does not change the plan list or plan",
       plans.length === 1 &&
         plans[0]?.subscriptionId === planSub &&
         plans[0].plan === planBefore.plan &&
         plans[0].status === planBefore.status &&
-        rowAfter?.desired_state === row.desired_state &&
-        rowAfter.plan === row.plan &&
         licenseInPlans(licenseSub) === 0,
-      { plans, rowBefore: row, rowAfter },
+      { plans, planBefore },
     );
     record("license-isolation", "the license sends no second welcome email", welcomeClaims(account).length === claims, {
       before: claims,
       after: welcomeClaims(account).length,
     });
     await stripe("DELETE", `/v1/subscriptions/${planSub}`, idSchema);
-    const ended = await rowWhere(
-      account,
-      server.serverId,
-      "plan ended",
-      (current) => current.desired_state === "stopped",
-    );
+    await waitFor("canceled plan hidden", async () => !(await account.plan(planSub)));
     const license = await account.license();
     record(
       "license-isolation",
-      "the server plan ends: the server stops with plan_ended, and the license stays active",
-      ended.observed_error === "plan_ended" && license.license?.status === "active",
-      { row: ended, license: license.license },
+      "the server plan ends and the license stays active",
+      (await account.plan(planSub)) === null && license.license?.status === "active",
+      { plans: await account.billing(), license: license.license },
     );
     await stripe("DELETE", `/v1/subscriptions/${licenseSub}`, idSchema);
     const licenseEnded = await licenseWhere(account, "license ended", (state) => state.license?.status === "canceled");
-    const stillStopped = account.row(server.serverId);
+    const plansAfter = await account.billing();
     record(
       "license-isolation",
-      "the license ends: the server row does not change",
-      stillStopped?.desired_state === "stopped" && stillStopped.deleted_at === null,
-      { license: licenseEnded.license, row: stillStopped },
+      "the license ends without creating or reopening a server plan",
+      plansAfter.length === 0,
+      { license: licenseEnded.license, plans: plansAfter },
     );
   },
 };
@@ -2162,10 +1589,7 @@ async function main(args: string[]) {
   const api = args[args.indexOf("--api") + 1];
   if (!args.includes("--api") || !api) throw new Error("Pass --api <Worker origin>.");
   const chosen = SCENARIOS.filter((scenario) => args.includes(scenario));
-  // A real VM costs money, so `boat` runs only when named.
-  const run = chosen.length > 0 ? chosen : SCENARIOS.filter((scenario) => scenario !== "boat");
-  if (run.includes("boat") && !process.env.BOAT_API_KEY?.trim())
-    throw new Error("BOAT_API_KEY is required for the boat scenario.");
+  const run = chosen.length > 0 ? chosen : SCENARIOS;
   const clocks: string[] = [];
   for (const scenario of run) {
     let account: Account | null = null;
@@ -2177,7 +1601,7 @@ async function main(args: string[]) {
       record(scenario, "scenario finished", false, error instanceof Error ? error.message : String(error));
     } finally {
       await account?.tearDown().catch((error: unknown) => {
-        record(scenario, "servers deleted", false, error instanceof Error ? error.message : String(error));
+        record(scenario, "test hosts removed", false, error instanceof Error ? error.message : String(error));
       });
     }
   }

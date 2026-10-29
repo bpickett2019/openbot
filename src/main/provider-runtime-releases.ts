@@ -42,7 +42,7 @@ export interface LatestReleaseContext {
  * held back. A list that cannot be read blocks nothing.
  */
 const BLOCKED_VERSIONS_URL =
-  "https://raw.githubusercontent.com/nightly-labs/openbot/main/provider-runtime-blocklist.json";
+  "https://raw.githubusercontent.com/bpickett2019/openbot/main/provider-runtime-blocklist.json";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_METADATA_BYTES = 4 * 1024 * 1024;

@@ -415,6 +415,12 @@ export const messages = {
   "settings.hostedServers.description": "У каждого сервера свои агенты, файлы и регулярные задачи.",
   "settings.hostedServers.add": "Добавить сервер",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} ГБ памяти, {disk} ГБ хранилища",
+  "settings.hostedServers.organizationFunded": "Финансируется организацией",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} ГБ памяти, {disk} ГБ постоянного хранилища · {region}",
+  "settings.hostedServers.administratorStopped": "Остановлен администратором",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Финансирование неактивно. Попросите администратора восстановить его перед запуском этого сервера.",
   "settings.hostedServers.creating": "Создание…",
   "settings.hostedServers.usageNote":
     "Сервер останавливается примерно через 15 минут после последнего сообщения или изменения, в том числе при открытом приложении. Нажатие клавиши или щелчок в приложении, сообщение или регулярная задача по расписанию запускают его снова. Его агенты и регулярные задачи работают, даже когда этот компьютер выключен.",

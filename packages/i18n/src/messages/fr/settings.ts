@@ -416,6 +416,12 @@ export const messages = {
   "settings.hostedServers.description": "Chaque serveur a ses propres agents, fichiers et routines.",
   "settings.hostedServers.add": "Ajouter un serveur",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} Go de mémoire, {disk} Go de stockage",
+  "settings.hostedServers.organizationFunded": "Financé par l’organisation",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} Go de mémoire, {disk} Go de stockage persistant · {region}",
+  "settings.hostedServers.administratorStopped": "Arrêt administratif",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Le financement est inactif. Demandez à votre administrateur de le rétablir avant de démarrer ce serveur.",
   "settings.hostedServers.creating": "Création…",
   "settings.hostedServers.usageNote":
     "Un serveur s’arrête environ 15 minutes après le dernier message ou la dernière modification, même quand une application est ouverte. Une touche ou un clic dans l’application, un message ou une routine planifiée le redémarre. Ses agents et ses routines fonctionnent quand cet ordinateur est éteint.",

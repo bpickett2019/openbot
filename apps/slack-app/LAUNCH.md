@@ -72,15 +72,10 @@ Do the steps in this order:
    - [ ] `POST /v2/remote/slack-route/validate` without a signature gives 401.
 4. **Signal**, after the Worker: Signal asks `/v2/remote/slack-route/validate` for 5 minutes after it
    starts, so an older Worker makes every `ingress` hello fail.
-   - [ ] Set `SLACK_SIGNING_SECRET` as `A0C5H5C95NH:<production secret>,A0C5G5XGS83:<development secret>`.
-         Signal binds each secret to its app. A value without app IDs turns the Slack route off (503).
-         `remote/.env.production` here and the server's `/opt/openbot/remote/.env.production` hold the
-         same value, encrypted with the root `DOTENV_PRIVATE_KEY_PRODUCTION`. It lists only
-         `A0C5H5C95NH`. To add the development app, change the repository file with `-fk .env.keys`,
-         then copy it to the server.
-   - [ ] Deploy as `docs/remote-session-deployment.md` says, with `remote/nginx/signal.openbot.run.conf`.
-   - [ ] `POST https://signal.openbot.run/v1/slack/events` without a signature gives 401, not 404 or
-         503.
+   - [ ] Configure `SLACK_SIGNING_SECRET` for your own app IDs. Each secret is bound to its app;
+         malformed configuration disables the route. Do not load the upstream encrypted environment.
+   - [ ] Follow `docs/remote-session-deployment.md` for the owned Cloudflare ingress and Signal Container.
+   - [ ] An unsigned POST to the actual Signal origin's `/v1/slack/events` gives 401, not 404 or 503.
 5. **Slack app settings** for `A0C5H5C95NH`:
    - [ ] Verify the request URL in **Event Subscriptions** and **Interactivity**.
    - [ ] **Manage Distribution**: turn on distribution, unlisted, for the pilot.
@@ -106,7 +101,7 @@ First with the test Worker and the development app, in a separate workspace:
 - [ ] Uninstall the app in Slack: the workspace shows **Token not accepted**. Connect it again: the
       old threads keep their agents.
 - [ ] **Disconnect**: the token is revoked, and Signal no longer routes the workspace here.
-- [ ] Nginx and Signal logs show no message text.
+- [ ] Worker and Signal logs show no message text, credentials or request bodies.
 
 Then the same with production, in the unlisted pilot.
 
@@ -118,7 +113,7 @@ Then the same with production, in the unlisted pilot.
   `url_verification`, so the check in the app settings passes. Confirm that a `manifest sync` keeps
   events flowing with no manual step.
 
-## Status
+## Historical upstream status — not fork deployment evidence
 
 | Item | State |
 | --- | --- |

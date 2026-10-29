@@ -5,9 +5,10 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "L’offre du serveur n’a pas pu être modifiée. Actualisez « Facturation » et réessayez.",
   "error.billing.confirmMismatch": "Saisissez le nom du serveur pour le supprimer.",
-  "error.billing.restartBusy": "Le serveur ne peut pas redémarrer maintenant. Réessayez dans une minute.",
-  "error.billing.planRequired": "L’offre de ce serveur a pris fin. Renouvelez-la pour démarrer le serveur.",
-  "error.billing.planSoldOut": "Cette offre est épuisée. Choisissez une autre offre.",
+  "error.billing.organizationManaged":
+    "Un administrateur gère cet hôte. Le paiement et les changements d’offre ne sont pas disponibles.",
+  "error.billing.fundingRevoked":
+    "Le financement est inactif. Demandez à votre administrateur de le rétablir avant de démarrer ce serveur.",
   // Billing errors.
   "error.billing.licenseExists": "Ce compte a déjà une licence. Modifiez plutôt son nombre d'utilisateurs.",
   "error.billing.licenseCurrency": "La licence doit utiliser la devise de vos autres forfaits.",

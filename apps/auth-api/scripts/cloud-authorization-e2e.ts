@@ -3,12 +3,16 @@
 //
 // Run: bun run test:cloud-authorization
 // It writes .openbot-build/cloud-authorization-e2e/report.json and exits non-zero on a failure.
+import { createHmac } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { BILLING_METADATA, billingLookupKey, memberLimitForPlan } from "@openbot/contracts/billing";
 import { Effect } from "effect";
 import { routeRequest } from "../../site-router/src/index";
+import { getServerEntitlement } from "../src/server/billing-entitlement";
 import { BillingSales } from "../src/server/billing-sales";
+import { BillingService } from "../src/server/billing-service";
 import { enforceMarketplaceIngress } from "../src/server/marketplace-request-policy";
 import { RemoteControlPlane } from "../src/server/remote-control-plane";
 import type { AuthUser } from "../src/server/types";
@@ -623,6 +627,221 @@ async function aRateLimitIgnoresForwardedFor() {
   );
 }
 
+async function organizationFundingCannotUseStripe() {
+  const { database, owner, clock, remote } = await remoteHost();
+  database
+    .prepare(
+      `INSERT INTO hosted_servers(
+         server_id, owner_user_id, name, provider, size, funding, funding_status, organization_entitlement_plan,
+         plan, billing_interval, currency, desired_state, observed_state, idempotency_key, created_at, updated_at
+       ) VALUES (?, ?, 'Organization', 'digitalocean', 'default', 'organization', 'active', 'pro',
+                 NULL, NULL, NULL, 'running', 'running', 'organization-request', 1, 1)`,
+    )
+    .run(HOST_ID, owner.id);
+  const binding = sqliteD1(database);
+  const entitlement = await Effect.runPromise(getServerEntitlement(binding, HOST_ID, clock.now));
+  const hosts = await Effect.runPromise(remote.listHosts(owner.id));
+  check(
+    "organization funding grants the selected member limit without a Stripe subscription or period",
+    entitlement?.plan === "pro" &&
+      entitlement.currentPeriodEnd === null &&
+      hosts[0]?.memberLimit === memberLimitForPlan("pro") &&
+      database.prepare("SELECT count(*) AS count FROM billing_subscriptions").get()?.count === 0,
+    { entitlement, memberLimit: hosts[0]?.memberLimit },
+  );
+  database
+    .prepare("INSERT INTO billing_customers(user_id, stripe_customer_id, created_at, updated_at) VALUES (?, ?, 1, 1)")
+    .run(owner.id, "cus_organization");
+  database
+    .prepare(
+      `INSERT INTO billing_subscriptions(
+         stripe_subscription_id, user_id, stripe_customer_id, server_id, plan, interval, currency, amount,
+         status, current_period_end, cancel_at_period_end, updated_at
+       ) VALUES ('sub_organization', ?, 'cus_organization', ?, 'standard', 'month', 'eur', 1000, 'active', ?, 0, 1)`,
+    )
+    .run(owner.id, HOST_ID, clock.now + 86_400_000);
+  const registered = await Effect.runPromise(
+    remote.registerHost(owner, {
+      hostId: HOST_ID,
+      name: "Organization",
+      ownerMembershipId: "membership-owner",
+    }),
+  );
+  database
+    .prepare(`INSERT INTO auth_sessions(id,user_id,token_hash,expires_at,created_at,last_used_at)
+    VALUES ('organization-owner-session', ?, 'organization-owner-hash', ?, 1, 1)`)
+    .run(owner.id, clock.now + 86_400_000);
+  const session = await Effect.runPromise(remote.startSession(owner.id, HOST_ID, "organization-owner-hash"));
+  database.prepare("UPDATE hosted_servers SET funding_status = 'revoked' WHERE server_id = ?").run(HOST_ID);
+  check(
+    "revoked organization funding cannot fall back to an active Stripe subscription",
+    (await Effect.runPromise(getServerEntitlement(binding, HOST_ID, clock.now))) === null,
+  );
+  const revokedHosts = await Effect.runPromise(remote.listHosts(owner.id));
+  check(
+    "revoked organization funding removes the selected member limit",
+    revokedHosts[0]?.memberLimit === memberLimitForPlan(null),
+    { memberLimit: revokedHosts[0]?.memberLimit },
+  );
+  check(
+    "revoked funding refuses native host registration",
+    (await outcome(
+      remote.registerHost(owner, { hostId: HOST_ID, name: "Replacement", ownerMembershipId: "membership-owner" }),
+    )) === "hosted_funding_revoked",
+  );
+  check(
+    "revoked funding refuses host reconnect tickets",
+    (await outcome(remote.issueHostTicket(HOST_ID, registered.machineToken ?? ""))) === "hosted_funding_revoked",
+  );
+  check(
+    "revoked funding refuses client session creation",
+    (await outcome(remote.startSession(owner.id, HOST_ID, "organization-owner-hash"))) === "hosted_funding_revoked",
+  );
+  check(
+    "revoked funding refuses client session tickets",
+    (await outcome(remote.issueSessionTicket(owner.id, session.sessionId, "synthetic-client-public-key"))) ===
+      "hosted_funding_revoked",
+  );
+  check("funding revocation keeps the owner membership", membershipStatus(database, owner.id) === "active:owner");
+  database.prepare("UPDATE hosted_servers SET funding_status = 'active' WHERE server_id = ?").run(HOST_ID);
+  check(
+    "restored organization funding uses its selected limit instead of the Stripe plan",
+    (await Effect.runPromise(getServerEntitlement(binding, HOST_ID, clock.now)))?.plan === "pro",
+  );
+  check(
+    "restored funding permits the original host credential",
+    (await outcome(remote.issueHostTicket(HOST_ID, registered.machineToken ?? ""))) === "ok",
+  );
+  check(
+    "restored funding reuses the original client session",
+    (await Effect.runPromise(remote.startSession(owner.id, HOST_ID, "organization-owner-hash"))).sessionId ===
+      session.sessionId,
+  );
+
+  const calls: string[] = [];
+  const synced: string[] = [];
+  const secret = "whsec_organization_e2e";
+  let metadataServerId = HOST_ID;
+  const billing = new BillingService({
+    database: binding,
+    secretKey: "sk_test_organization_e2e",
+    webhookSecret: secret,
+    now: () => clock.now,
+    onSubscriptionSynced: (sync) =>
+      Effect.sync(() => {
+        synced.push(sync.serverId);
+      }),
+    fetch: async (input, init) => {
+      calls.push(`${init?.method ?? "GET"} ${input}`);
+      if (init?.method && init.method !== "GET") throw new Error("An organization Stripe mutation was sent.");
+      const id = new URL(input).pathname.split("/").at(-1);
+      return Response.json({
+        id,
+        customer: "cus_organization",
+        status: "canceled",
+        currency: "eur",
+        cancel_at_period_end: true,
+        current_period_end: Math.floor(clock.now / 1000),
+        metadata: { [BILLING_METADATA.serverId]: metadataServerId, [BILLING_METADATA.userId]: owner.id },
+        items: {
+          data: [
+            {
+              id: "si_organization",
+              price: {
+                id: "price_standard",
+                lookup_key: billingLookupKey("standard", "month"),
+                currency: "eur",
+                unit_amount: 1000,
+              },
+            },
+          ],
+        },
+      });
+    },
+  });
+  for (const status of ["active", "revoked"]) {
+    database.prepare("UPDATE hosted_servers SET funding_status = ? WHERE server_id = ?").run(status, HOST_ID);
+    const operations: [string, Effect.Effect<unknown, unknown>][] = [
+      [
+        "checkout",
+        billing.createCheckout({
+          user: owner,
+          serverId: HOST_ID,
+          plan: "standard",
+          interval: "month",
+          currency: "eur",
+          target: "desktop",
+          origin: "https://account.example.test",
+        }),
+      ],
+      ["cancel server plans", billing.cancelServerPlans(owner.id, HOST_ID)],
+      ["cancel subscription", billing.cancelSubscription("sub_organization")],
+      ["disable renewal", billing.setServerRenewal(owner.id, HOST_ID, true)],
+      ["enable renewal", billing.setServerRenewal(owner.id, HOST_ID, false)],
+      [
+        "portal cancel",
+        billing.createPortal(
+          owner.id,
+          { flow: "cancel", subscriptionId: "sub_organization" },
+          "desktop",
+          "https://account.example.test",
+        ),
+      ],
+      [
+        "portal update",
+        billing.createPortal(
+          owner.id,
+          { flow: "update", subscriptionId: "sub_organization" },
+          "desktop",
+          "https://account.example.test",
+        ),
+      ],
+    ];
+    for (const [name, operation] of operations) {
+      check(`${status} organization funding refuses ${name}`, (await outcome(operation)) === "organization_funded");
+    }
+  }
+  check("organization billing refusals make no Stripe call", calls.length === 0, calls);
+  const sendWebhook = async (id: string, subscriptionId: string) => {
+    const body = JSON.stringify({
+      id,
+      type: "customer.subscription.updated",
+      created: Math.floor(clock.now / 1000),
+      data: { object: { id: subscriptionId } },
+    });
+    const timestamp = Math.floor(clock.now / 1000);
+    const signature = createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
+    await Effect.runPromise(billing.handleWebhook(body, `t=${timestamp},v1=${signature}`));
+  };
+  await sendWebhook("evt_org_stored", "sub_organization");
+  await sendWebhook("evt_org_new", "sub_organization_new");
+  metadataServerId = "self-hosted-server";
+  await sendWebhook("evt_org_reassigned", "sub_organization");
+  check(
+    "Stripe events cannot change or create organization billing rows",
+    database.prepare("SELECT status FROM billing_subscriptions WHERE stripe_subscription_id = 'sub_organization'").get()
+      ?.status === "active" &&
+      database.prepare("SELECT count(*) AS count FROM billing_subscriptions").get()?.count === 1 &&
+      synced.length === 0 &&
+      database.prepare("SELECT funding_status FROM hosted_servers WHERE server_id = ?").get(HOST_ID)?.funding_status ===
+        "revoked",
+  );
+  await sendWebhook("evt_self_hosted", "sub_self_hosted");
+  check(
+    "Stripe still synchronizes a non-organization subscription",
+    database.prepare("SELECT status FROM billing_subscriptions WHERE stripe_subscription_id = 'sub_self_hosted'").get()
+      ?.status === "canceled" && synced.includes("self-hosted-server"),
+  );
+  database
+    .prepare("UPDATE hosted_servers SET funding_status = 'active', desired_state = 'deleted' WHERE server_id = ?")
+    .run(HOST_ID);
+  check(
+    "a deleted organization server cannot retain an entitlement through Stripe",
+    (await Effect.runPromise(getServerEntitlement(binding, HOST_ID, clock.now))) === null,
+  );
+  database.close();
+}
+
 const scenarios = [
   aRemovedMemberCannotRejoinWithAnOldInvite,
   aMemberWhoLeftRejoinsWithTheLink,
@@ -639,6 +858,7 @@ const scenarios = [
   aCheckoutReturnStaysOnTheAccountSite,
   aSiteServesOnlyItsOwnFiles,
   aRateLimitIgnoresForwardedFor,
+  organizationFundingCannotUseStripe,
 ];
 for (const scenario of scenarios) {
   try {

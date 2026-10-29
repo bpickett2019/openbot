@@ -5,9 +5,10 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "Het abonnement van de server kon niet worden gewijzigd. Vernieuw Facturering en probeer het opnieuw.",
   "error.billing.confirmMismatch": "Typ de naam van de server om hem te verwijderen.",
-  "error.billing.restartBusy": "De server kan nu niet herstarten. Probeer het over een minuut opnieuw.",
-  "error.billing.planRequired": "Het abonnement van deze server is afgelopen. Verleng het om de server te starten.",
-  "error.billing.planSoldOut": "Dit abonnement is uitverkocht. Kies een ander abonnement.",
+  "error.billing.organizationManaged":
+    "Een beheerder beheert deze host. Afrekenen en abonnementswijzigingen zijn niet beschikbaar.",
+  "error.billing.fundingRevoked":
+    "De financiering is niet actief. Vraag je beheerder deze te herstellen voordat je deze server start.",
   "error.billing.licenseExists": "Dit account heeft al een licentie. Wijzig in plaats daarvan de gebruikers.",
   "error.billing.licenseCurrency": "De licentie moet de valuta van je andere abonnementen gebruiken.",
   "error.billing.licenseUsersInUse":

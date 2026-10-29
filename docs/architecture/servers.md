@@ -627,28 +627,24 @@ settings are not synchronized between devices.
 
 ## Billing
 
-Billing is per server. One account can pay for several servers; each server has its own Stripe
+Stripe billing is per server. One account can pay for several servers; each Stripe-funded server has its own Stripe
 subscription. The Account Worker (`apps/auth-api/src/server/billing-service.ts`) talks to the Stripe
 REST API with `fetch`; there is no Stripe SDK. The plan catalog in `packages/contracts/src/billing.ts`
 holds the plan IDs, storage, member and site limits, relative speed and lookup keys, and no amounts. The amounts are six Stripe Prices with the lookup
 keys `openbot_{plan}_{interval}`. `bun run api:stripe:bootstrap` (`scripts/stripe-bootstrap.ts`)
 creates them and the Customer Portal settings.
 
-- The add server dialog starts a plan. The hosting service
-  (`apps/auth-api/src/server/hosted-billing.ts`) makes the Stripe customer before the Checkout, so
-  two open Checkouts use one customer. The Checkout sets the subscription metadata
-  `openbot_user_id` and `openbot_server_id` (`BILLING_METADATA`). The billing service calls the
-  `onSubscriptionSynced` hook after each subscription sync; the hosting side uses it to provision,
-  stop and resume servers, so billing does not know about boat. See
-  [hosted servers](../hosted-servers.md#lifecycle). The webhook links a new Stripe customer to the
-  account from `openbot_user_id`. It never moves a known
-  customer to another account, and it skips a subscription that names no account.
+- Organization hosting uses an operator-funded discriminator, not Checkout. Its entitlement plan
+  lives in the existing entitlement service; Stripe sync cannot change organization rows.
+  `hosted-billing.ts` remains the funding/access boundary for hosted callers, while ordinary
+  Stripe license/subscription records retain their billing owner. See
+  [hosted lifecycle](../hosted-servers.md#lifecycle).
 - Desktop Settings → Billing and the web Billing dialog render `@openbot/ui/features/billing`: one
   row for each open plan, with the server name, the plan, its price, and its renewal controls.
-  Hosted plans support cancellation that keeps data, Keep server, and explicit deletion now or
-  after the paid period. A stored deletion date and subscription ID drive the cron; a fresh
-  terminal Stripe state and a per-server operation lease guard deletion. See
-  [server deletion](../hosted-servers.md#billing-and-server-deletion). The price is the list price of the Stripe Price in the subscription's currency (from
+  Organization hosts instead show funding and actual provider resources, with no renewal controls
+  or wake when funding is revoked. The owner can explicitly delete immediately; provider and
+  Remote cleanup must finish before the allocation slot is released. See
+  [server deletion](../hosted-servers.md#billing-and-server-deletion). For Stripe rows, the price is the list price in the subscription's currency (from
   `currency_options` when that is not the Price's base currency), before discounts and tax. The
   webhook stores it with the subscription. The
   account button opens the Customer Portal for the payment method and invoices.
@@ -742,17 +738,17 @@ See [multi-tenant hosting](../multi-tenant-hosting.md) for installation, permiss
 
 ## Hosted servers
 
-A hosted server is one [boat](https://boat.dev) sandbox for one account. It runs the Linux
-OpenBot build under Xvfb and is a normal Remote host after its first start. The account Worker
-owns the sandbox lifecycle: it creates, resumes and deletes sandboxes, and D1 keeps the desired
-and observed state. A server reports each minute while it is in use, and the Worker stops it after
-15 minutes with no report. boat also stops each sandbox at the end of a 2-hour lease that activity
-extends. When boat stops a server in use, the Worker resumes it, and clients ask the Worker to
-start a stopped server when a connection fails. No message
-waits in the Worker while a server is stopped; the client keeps it and connects again. The Worker's boat key cannot read files or run commands in a
-sandbox. On a hosted server only, main reads the memory of the machine, and the backend holds new
-turns while it is low and limits the turns that run at the same time. See
-[hosted servers](../hosted-servers.md) for the flow, the configuration, the memory guards and the template.
+The managed fork host is one DigitalOcean Droplet plus a separately retained ext4 Volume.
+The account Worker owns allocation, funding, desired/observed state and provider reconciliation.
+It does not alias a Droplet as a Boat sandbox or put cloud API credentials in the desktop.
+Idle, activity, routine and connector paths all enforce funding. Uncertain provider mutations keep
+the allocation reserved and are reconciled by exact identity rather than blindly replayed.
+
+The root-owned native-volume guard runs before the packaged OpenBot container, preserves the
+host/session/keyring identity, excludes another writer and rejects missing established state or
+image downgrades. The app's existing memory guards remain active. Accounts, the browser, Signal
+and Realtime TURN remain on Cloudflare. See [hosted servers](../hosted-servers.md) for bindings,
+operator authorization, costs, native state custody and unverified commissioning scenarios.
 
 A self-hosted server uses the same Linux build, scripts and units on the owner's own computer, with
 `/opt/OpenBot/hosted/mode` set to `self`. It has no claim: main starts in server mode

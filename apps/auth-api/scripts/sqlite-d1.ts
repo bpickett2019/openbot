@@ -2,6 +2,8 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 
 /** A D1 binding over node:sqlite, with the calls that the service makes. */
 export function sqliteD1(database: DatabaseSync): D1Database {
+  // D1 serializes each atomic batch. Concurrent claim redeems must not nest SQLite transactions.
+  let pendingBatch: Promise<unknown> = Promise.resolve();
   const changes = () => Number(database.prepare("SELECT total_changes() AS changes").get()?.changes);
   const result = <T>(results: T[], changed: number): D1Result<T> => ({
     success: true,
@@ -48,17 +50,21 @@ export function sqliteD1(database: DatabaseSync): D1Database {
   };
   return {
     prepare: (query: string) => statement(query),
-    batch: async <T>(statements: D1PreparedStatement[]) => {
-      database.exec("BEGIN");
-      try {
-        const results: D1Result<T>[] = [];
-        for (const prepared of statements) results.push(await prepared.all<T>());
-        database.exec("COMMIT");
-        return results;
-      } catch (error) {
-        database.exec("ROLLBACK");
-        throw error;
-      }
+    batch: <T>(statements: D1PreparedStatement[]) => {
+      const operation = pendingBatch.then(async () => {
+        database.exec("BEGIN");
+        try {
+          const results: D1Result<T>[] = [];
+          for (const prepared of statements) results.push(await prepared.all<T>());
+          database.exec("COMMIT");
+          return results;
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+      });
+      pendingBatch = operation.catch(() => undefined);
+      return operation;
     },
     exec: unused,
     withSession: unused,

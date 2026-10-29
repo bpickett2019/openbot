@@ -402,6 +402,12 @@ export const messages = {
   "settings.hostedServers.description": "Ogni server ha i propri agenti, file e routine.",
   "settings.hostedServers.add": "Aggiungi server",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB di memoria, {disk} GB di spazio",
+  "settings.hostedServers.organizationFunded": "Finanziato dall’organizzazione",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB di memoria, {disk} GB di spazio persistente · {region}",
+  "settings.hostedServers.administratorStopped": "Arresto amministrativo",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Il finanziamento non è attivo. Chiedi all’amministratore di ripristinarlo prima di avviare questo server.",
   "settings.hostedServers.creating": "Creazione…",
   "settings.hostedServers.usageNote":
     "Un server si ferma circa 15 minuti dopo l'ultimo messaggio o l'ultima modifica, anche se un'app è aperta. Un tasto premuto o un clic nell'app, un messaggio o una routine programmata lo riavviano. I suoi agenti e le sue routine funzionano anche quando questo computer è spento.",

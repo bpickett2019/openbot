@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/solid-router";
 import { handleBrowserApi } from "../../../server/browser-api";
 import { readHostLogo } from "../../../server/host-logo";
@@ -14,9 +15,11 @@ import {
   requestTeamInviteEmailDelivery,
 } from "../../../server/request-auth";
 import { requestSourceIp } from "../../../server/source-ip";
+import { requireWorkerBindings } from "../../../server/types";
 
 function handle({ request }: { request: Request }) {
   return handleBrowserApi(request, {
+    browserAppOrigin: requireWorkerBindings(env).BROWSER_APP_ORIGIN,
     auth: requestAuthService(),
     remote: requestRemoteControlPlane(),
     hostLogo: (hostId, version) => readHostLogo(requestAvatarBucket(), hostId, version),

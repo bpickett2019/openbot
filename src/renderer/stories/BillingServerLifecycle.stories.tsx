@@ -241,11 +241,12 @@ export const FailedAction: Story = { args: { failNext: true } };
 export const Narrow: Story = { args: { narrow: true } };
 
 /** The app's real controller and panel, with in-memory account API responses. */
-function ApplicationBillingStory(props: { failNext?: boolean }) {
+function ApplicationBillingStory(props: { failNext?: boolean; organization?: "active" | "revoked" }) {
   const { t } = useText();
   let failNext = untrack(() => props.failNext) ?? false;
   const [state, setState] = createStore({ open: true });
   let hosts: HostedServerSummary[] = previewServers().map((server) => ({
+    funding: "stripe",
     serverId: server.id,
     name: server.name,
     size: "small",
@@ -270,6 +271,28 @@ function ApplicationBillingStory(props: { failNext?: boolean }) {
     currentPeriodEnd: server.paidThrough,
     cancelAtPeriodEnd: server.cancelAtPeriodEnd,
   }));
+  const organization = untrack(() => props.organization);
+  if (organization) {
+    hosts = [
+      {
+        funding: "organization",
+        fundingStatus: organization,
+        serverId: "organization-shared-host",
+        name: "Organization shared server",
+        size: "default",
+        plan: null,
+        interval: null,
+        currency: null,
+        deletionScheduledAt: null,
+        resources: { provider: "digitalocean", vcpu: 4, memoryGb: 8, diskGb: 100, region: "nyc3" },
+        state: "stopped",
+        error: null,
+        createdAt: "2026-10-01T12:00:00Z",
+        updatedAt: "2026-10-01T12:00:00Z",
+      },
+    ];
+    plans = [];
+  }
   const hosting = createSettingsHostedServersStore(
     {
       get open() {
@@ -277,14 +300,28 @@ function ApplicationBillingStory(props: { failNext?: boolean }) {
       },
       hostedServersApi: {
         ...createMockHostedServers(),
-        list: async () => structuredClone({ available: true, lifecycleAvailable: true, servers: hosts, maxServers: 3 }),
+        list: async () =>
+          structuredClone({ available: !organization, lifecycleAvailable: true, servers: hosts, maxServers: 3 }),
+        wake: async (serverId) => {
+          const host = hosts.find((server) => server.serverId === serverId);
+          if (!host || (host.funding === "organization" && host.fundingStatus === "revoked"))
+            throw new Error("Server cannot start");
+          hosts = hosts.map((server) => (server.serverId === serverId ? { ...server, state: "running" } : server));
+          return structuredClone({ ...host, state: "running" });
+        },
+        delete: async ({ serverId, confirmName }) => {
+          const host = hosts.find((server) => server.serverId === serverId);
+          if (!host || host.name !== confirmName) throw new Error("Invalid server");
+          hosts = hosts.filter((server) => server.serverId !== serverId);
+          plans = plans.filter((server) => server.serverId !== serverId);
+        },
         lifecycle: async (input) => {
           if (failNext) {
             failNext = false;
             throw new Error(t("billing.lifecycle.failed"));
           }
           const host = hosts.find((server) => server.serverId === input.serverId);
-          if (!host || (input.action === "delete" && input.confirmName !== host.name))
+          if (host?.funding !== "stripe" || (input.action === "delete" && input.confirmName !== host.name))
             throw new Error("Invalid server");
           if (input.action === "delete" && input.timing === "now") {
             hosts = hosts.filter((server) => server.serverId !== input.serverId);
@@ -295,7 +332,7 @@ function ApplicationBillingStory(props: { failNext?: boolean }) {
             server.serverId === input.serverId ? { ...server, cancelAtPeriodEnd: input.action !== "keep" } : server,
           );
           hosts = hosts.map((server) =>
-            server.serverId === input.serverId
+            server.serverId === input.serverId && server.funding === "stripe"
               ? {
                   ...server,
                   deletionScheduledAt:
@@ -312,7 +349,7 @@ function ApplicationBillingStory(props: { failNext?: boolean }) {
   );
   const billing = createBillingStore(
     () => ({
-      getState: async () => structuredClone({ available: true, hasCustomer: true, servers: plans }),
+      getState: async () => structuredClone({ available: !organization, hasCustomer: !organization, servers: plans }),
       openPortal: async () => undefined,
     }),
     () => state.open,
@@ -333,3 +370,6 @@ function ApplicationBillingStory(props: { failNext?: boolean }) {
 export const ApplicationBilling: Story = { render: () => <ApplicationBillingStory /> };
 
 export const ApplicationFailedAction: Story = { render: () => <ApplicationBillingStory failNext /> };
+
+export const OrganizationFunded: Story = { render: () => <ApplicationBillingStory organization="active" /> };
+export const OrganizationFundingRevoked: Story = { render: () => <ApplicationBillingStory organization="revoked" /> };

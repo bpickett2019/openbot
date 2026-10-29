@@ -3,7 +3,7 @@ import type { messages as source } from "../en/billing";
 
 export const messages = {
   "billing.title": "결제",
-  "billing.description": "서버마다 요금제가 따로 있어요. 결제는 Stripe가 처리해요.",
+  "billing.description": "서버 요금제와 조직의 비용 지원을 확인할 수 있어요.",
   "billing.loading": "결제 정보를 불러오는 중…",
   "billing.unavailable": "이 계정 서버에서는 결제를 사용할 수 없어요.",
   "billing.loadFailed": "결제 정보를 불러올 수 없어요.",

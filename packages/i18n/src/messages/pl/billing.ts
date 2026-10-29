@@ -3,7 +3,7 @@ import type { messages as source } from "../en/billing";
 
 export const messages = {
   "billing.title": "Rozliczenia",
-  "billing.description": "Każdy serwer ma własny plan. Płatności obsługuje Stripe.",
+  "billing.description": "Sprawdź plany serwerów i finansowanie przez organizację.",
   "billing.loading": "Wczytywanie rozliczeń…",
   "billing.unavailable": "Rozliczenia nie są dostępne na tym serwerze kont.",
   "billing.loadFailed": "Nie udało się wczytać rozliczeń.",

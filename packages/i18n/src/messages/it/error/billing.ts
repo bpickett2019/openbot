@@ -5,9 +5,10 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "Non è stato possibile cambiare il piano del server. Aggiorna Fatturazione e riprova.",
   "error.billing.confirmMismatch": "Scrivi il nome del server per eliminarlo.",
-  "error.billing.restartBusy": "Il server non può riavviarsi ora. Riprova tra un minuto.",
-  "error.billing.planRequired": "Il piano di questo server è terminato. Rinnovalo per avviare il server.",
-  "error.billing.planSoldOut": "Questo piano è esaurito. Scegli un altro piano.",
+  "error.billing.organizationManaged":
+    "Un amministratore gestisce questo host. Il pagamento e le modifiche al piano non sono disponibili.",
+  "error.billing.fundingRevoked":
+    "Il finanziamento non è attivo. Chiedi all’amministratore di ripristinarlo prima di avviare questo server.",
   "error.billing.licenseExists": "Questo account ha già una licenza. Modifica invece i suoi utenti.",
   "error.billing.licenseCurrency": "La licenza deve usare la valuta degli altri piani.",
   "error.billing.licenseUsersInUse": "La licenza non può avere meno utenti delle persone che la usano ora.",

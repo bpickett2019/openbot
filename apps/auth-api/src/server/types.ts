@@ -18,6 +18,8 @@ export interface WorkerBindings {
   /** Checked by the Live Activity relay only, so a Worker without it keeps its other routes. */
   LIVE_ACTIVITY_RATE_LIMITER?: RateLimit;
   AUTH_EXPOSE_DEVELOPMENT_CODE?: string;
+  /** The single HTTPS browser origin when a reverse proxy serves the web client. */
+  BROWSER_APP_ORIGIN?: string;
   EMAIL_SMTP_HOST?: string;
   EMAIL_SMTP_PORT?: string;
   EMAIL_SMTP_USERNAME?: string;
@@ -69,14 +71,16 @@ export interface WorkerBindings {
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   HOSTED_SERVERS_ENABLED?: string;
-  /** Comma-separated account IDs or emails that can create hosted servers. `*` allows each account. */
-  HOSTED_SERVERS_ALLOWED_USER_IDS?: string;
-  /** A request with this key in `OpenBot-Hosting-Developer-Key` can create hosted servers. Test Worker only. */
-  HOSTED_SERVERS_DEVELOPER_KEY?: string;
-  /** The boat named snapshot that new hosted servers start from. */
-  HOSTED_SERVER_TEMPLATE?: string;
-  BOAT_API_KEY?: string;
-  BOAT_WEBHOOK_SECRET?: string;
+  /** Separate operator bearer, never a browser or desktop credential. */
+  HOSTED_ORGANIZATION_ADMIN_TOKEN?: string;
+  HOSTED_ORGANIZATION_OWNER_USER_ID?: string;
+  HOSTED_ORGANIZATION_ENTITLEMENT_PLAN?: string;
+  DIGITALOCEAN_API_TOKEN?: string;
+  HOSTED_DIGITALOCEAN_REGION?: string;
+  HOSTED_DIGITALOCEAN_SIZE?: string;
+  HOSTED_DIGITALOCEAN_IMAGE_ID?: string;
+  HOSTED_OPENBOT_IMAGE_DIGEST?: string;
+  HOSTED_OPENBOT_VERSION?: string;
   /** An OpenPanel server client and its write-only secret, for account events. Set only in production. */
   OPENPANEL_CLIENT_ID?: string;
   OPENPANEL_CLIENT_SECRET?: string;

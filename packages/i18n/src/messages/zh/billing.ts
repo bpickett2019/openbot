@@ -4,7 +4,7 @@ import type { messages as source } from "../en/billing";
 export const messages = {
   // The Billing tab in Settings and the Billing dialog in the web client.
   "billing.title": "账单",
-  "billing.description": "每个服务器有自己的套餐，付款由 Stripe 处理。",
+  "billing.description": "查看服务器套餐和组织资助情况。",
   "billing.loading": "正在加载账单…",
   "billing.unavailable": "该账号服务器不支持账单功能。",
   "billing.loadFailed": "无法加载账单。",

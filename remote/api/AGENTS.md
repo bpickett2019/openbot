@@ -40,6 +40,6 @@ let a host call Discord in a guild or channel that is not routed to its socket.
   message, as `src/app.ts` does.
 - This project uses Bun types. Keep them inside `remote/api`; root `scripts/**` and Electron main
   use Node types. See [check design notes](../../docs/development-checks.md#check-coverage).
-- `remote/scripts/update.ts` recreates the live coturn container. Do not run it as a check.
+- `remote/scripts/update.ts --deploy` changes owned Cloudflare Signal; `--enable` starts paid runtime. Neither is a check.
 - `bun run test:signal` starts this service with throwaway secrets and checks the secret and
   authentication rules above over real HTTP and WebSocket. CI runs it when `remote/` changes.

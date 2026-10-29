@@ -409,6 +409,12 @@ export const messages = {
   "settings.hostedServers.description": "Jeder Server hat eigene Agenten, Dateien und Routinen.",
   "settings.hostedServers.add": "Server hinzufügen",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB Arbeitsspeicher, {disk} GB Speicherplatz",
+  "settings.hostedServers.organizationFunded": "Organisationsfinanziert",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB Arbeitsspeicher, {disk} GB dauerhafter Speicher · {region}",
+  "settings.hostedServers.administratorStopped": "Administrativ gestoppt",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Die Finanzierung ist inaktiv. Bitte deinen Administrator, sie vor dem Serverstart wieder zu aktivieren.",
   "settings.hostedServers.creating": "Wird erstellt…",
   "settings.hostedServers.usageNote":
     "Ein Server stoppt etwa 15 Minuten nach der letzten Nachricht oder Änderung, auch bei geöffneter App. Ein Tastendruck oder Klick in der App, eine Nachricht oder eine geplante Routine startet ihn erneut. Seine Agenten und Routinen arbeiten auch bei ausgeschaltetem Computer.",

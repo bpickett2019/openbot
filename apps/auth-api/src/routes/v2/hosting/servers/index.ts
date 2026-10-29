@@ -18,7 +18,7 @@ export const Route = createFileRoute("/v2/hosting/servers/")({
           Effect.gen(function* () {
             const user = yield* requestUser(request);
             if (!user) return apiError(401, "unauthorized", "Sign in is required.");
-            return json(yield* requestHostedServerService(request).list(user));
+            return json(yield* requestHostedServerService().list(user));
           }),
           hostedServerErrorResponse,
         ),
@@ -29,7 +29,7 @@ export const Route = createFileRoute("/v2/hosting/servers/")({
             if (!user) return apiError(401, "unauthorized", "Sign in is required.");
             const body = yield* readJsonObject(request);
             return json(
-              yield* requestHostedServerService(request).create(
+              yield* requestHostedServerService().create(
                 user,
                 {
                   name: body.name,

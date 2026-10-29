@@ -91,7 +91,7 @@ export function createWorkerHandler(
       const now = controller.scheduledTime;
       // Retention starts after the hosted server check; delivery and site cleanup run beside both.
       const hostingThenRetention = Effect.gen(function* () {
-        const hostingResult = bindings.BOAT_API_KEY ? yield* tickHostedServers(bindings, now) : null;
+        const hostingResult = bindings.DIGITALOCEAN_API_TOKEN ? yield* tickHostedServers(bindings, now) : null;
         if (hostingResult && Object.values(hostingResult).some(Boolean)) {
           console.info("Hosted server check completed.", hostingResult);
         }

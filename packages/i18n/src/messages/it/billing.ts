@@ -4,7 +4,7 @@ import type { messages as source } from "../en/billing";
 export const messages = {
   // The Billing tab in Settings and the Billing dialog in the web client.
   "billing.title": "Fatturazione",
-  "billing.description": "Ogni server ha il suo piano. Il pagamento è gestito da Stripe.",
+  "billing.description": "Visualizza i piani dei server e il finanziamento dell’organizzazione.",
   "billing.loading": "Caricamento della fatturazione…",
   "billing.unavailable": "La fatturazione non è disponibile su questo server account.",
   "billing.loadFailed": "Impossibile caricare la fatturazione.",

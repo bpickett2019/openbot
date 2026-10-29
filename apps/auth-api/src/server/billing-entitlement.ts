@@ -17,6 +17,8 @@ export interface BillingEntitlement {
  * Only a subscription of the account that owns the server counts, so metadata that names another
  * account's server gives that server nothing. The owner comes from the Remote host, or from the hosted
  * server row, which exists before the server publishes its host.
+ * Organization funding uses its stored entitlement plan without a Stripe subscription or billing period.
+ * A revoked or deleted organization server never falls back to a Stripe subscription.
  * A `past_due` subscription keeps its plan while Stripe retries the payment, until the end of the period
  * that the unpaid invoice is for. Stripe must cancel the subscription or mark it unpaid after the last
  * retry (docs/hosted-servers.md, Production), or the plan lasts for that whole period.
@@ -27,6 +29,32 @@ export const getServerEntitlement = Effect.fn("Billing.getServerEntitlement")(fu
   serverId: string,
   now = Date.now(),
 ): Effect.fn.Return<BillingEntitlement | null, BillingEntitlementError> {
+  const organization = yield* Effect.tryPromise({
+    try: () =>
+      database
+        .prepare(
+          `SELECT funding_status, organization_entitlement_plan, desired_state, observed_state
+           FROM hosted_servers WHERE server_id = ? AND funding = 'organization'`,
+        )
+        .bind(serverId)
+        .first<{
+          funding_status: string | null;
+          organization_entitlement_plan: string | null;
+          desired_state: string;
+          observed_state: string;
+        }>(),
+    catch: () => new BillingEntitlementError({}),
+  });
+  if (organization) {
+    if (
+      organization.funding_status !== "active" ||
+      organization.desired_state === "deleted" ||
+      organization.observed_state === "deleted"
+    )
+      return null;
+    const plan = BILLING_PLANS.find((candidate) => candidate.id === organization.organization_entitlement_plan);
+    return plan ? { plan: plan.id, storageGb: plan.storageGb, status: "active", currentPeriodEnd: null } : null;
+  }
   const rows = yield* Effect.tryPromise({
     try: () =>
       database

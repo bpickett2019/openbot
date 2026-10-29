@@ -5,9 +5,9 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "サーバーのプランを変更できませんでした。「お支払い」を更新して、もう一度お試しください。",
   "error.billing.confirmMismatch": "削除するにはサーバー名を入力してください。",
-  "error.billing.restartBusy": "サーバーは今は再起動できません。1 分後にもう一度お試しください。",
-  "error.billing.planRequired": "このサーバーのプランは終了しました。サーバーを起動するにはプランを更新してください。",
-  "error.billing.planSoldOut": "このプランは売り切れです。別のプランを選んでください。",
+  "error.billing.organizationManaged": "このホストは管理者が管理しています。購入手続きとプラン変更は利用できません。",
+  "error.billing.fundingRevoked":
+    "組織の費用負担が無効です。このサーバーを起動する前に、管理者に再開を依頼してください。",
   // Billing errors.
   "error.billing.licenseExists": "このアカウントにはすでにライセンスがあります。代わりにユーザー数を変更してください。",
   "error.billing.licenseCurrency": "ライセンスは他のプランと同じ通貨を使う必要があります。",

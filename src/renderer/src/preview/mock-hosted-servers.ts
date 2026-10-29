@@ -50,8 +50,9 @@ const NEXT_STATE: Partial<Record<HostedServerState, HostedServerState>> = {
 
 /** One stopped server and one whose plan ended, so the preview shows the start and renew actions. */
 export function createMockHostedServers(billingPlans?: BillingServerPlan[]): HostedServersDesktopApi {
-  let servers: HostedServerSummary[] = [
+  let servers: Extract<HostedServerSummary, { funding: "stripe" }>[] = [
     {
+      funding: "stripe",
       serverId: "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f",
       name: "Research server",
       size: "small",
@@ -64,6 +65,7 @@ export function createMockHostedServers(billingPlans?: BillingServerPlan[]): Hos
       updatedAt: CREATED_AT,
     },
     {
+      funding: "stripe",
       serverId: "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
       name: "Team server",
       size: "default",
@@ -77,10 +79,11 @@ export function createMockHostedServers(billingPlans?: BillingServerPlan[]): Hos
     },
   ];
   if (billingPlans) {
-    servers = billingPlans.flatMap((plan): HostedServerSummary[] =>
+    servers = billingPlans.flatMap((plan): Extract<HostedServerSummary, { funding: "stripe" }>[] =>
       plan.serverId
         ? [
             {
+              funding: "stripe",
               serverId: plan.serverId,
               name: plan.serverName ?? "Archive server",
               plan: plan.plan,
@@ -102,7 +105,10 @@ export function createMockHostedServers(billingPlans?: BillingServerPlan[]): Hos
   };
   /** The account server's idempotency key: a repeated create request returns the same server. */
   const requests = new Map<string, string>();
-  const update = (serverId: string, change: Partial<HostedServerSummary>): HostedServerSummary => {
+  const update = (
+    serverId: string,
+    change: Partial<Extract<HostedServerSummary, { funding: "stripe" }>>,
+  ): HostedServerSummary => {
     const server = servers.find((entry) => entry.serverId === serverId);
     if (!server) throw new Error("The hosted server does not exist.");
     const next = { ...server, ...change, updatedAt: new Date().toISOString() };
@@ -155,7 +161,8 @@ export function createMockHostedServers(billingPlans?: BillingServerPlan[]): Hos
       }
       if (servers.length >= MOCK_MAX_SERVERS) throw new Error("This account has the maximum number of servers.");
       const now = new Date().toISOString();
-      const server: HostedServerSummary = {
+      const server: Extract<HostedServerSummary, { funding: "stripe" }> = {
+        funding: "stripe",
         serverId: crypto.randomUUID(),
         name: input.name,
         size: HOSTED_PLAN_SIZE[input.plan],

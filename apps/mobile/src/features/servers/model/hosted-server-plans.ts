@@ -4,12 +4,13 @@ import type { HostedServerSummary } from "@openbot/contracts/hosted-servers";
  * What the setup screen shows for a new server. `payment`: the server waits for the first payment.
  * `connecting`: the server runs, but this phone does not list it yet.
  */
-export type HostedSetupStatus = "payment" | "creating" | "starting" | "connecting" | "ready" | "error";
+export type HostedSetupStatus = "payment" | "creating" | "starting" | "connecting" | "ready" | "error" | "revoked";
 
 export function hostedSetupStatus(server: HostedServerSummary, listed: boolean): HostedSetupStatus {
+  if (server.funding === "organization" && server.fundingStatus === "revoked") return "revoked";
   switch (server.state) {
     case "awaiting_payment":
-      return "payment";
+      return server.funding === "stripe" ? "payment" : "error";
     case "creating":
       return "creating";
     case "starting":
@@ -28,7 +29,7 @@ export function hostedSetupStatus(server: HostedServerSummary, listed: boolean):
 
 /** The setup polls until the server is ready or failed. */
 export function hostedSetupSettled(status: HostedSetupStatus): boolean {
-  return status === "ready" || status === "error";
+  return status === "ready" || status === "error" || status === "revoked";
 }
 
 /**
@@ -36,6 +37,7 @@ export function hostedSetupSettled(status: HostedSetupStatus): boolean {
  * a failure with its Retry action. A listed server that wakes or runs is not in setup.
  */
 export function hostedServerInSetup(server: HostedServerSummary, listed: boolean): boolean {
+  if (server.funding === "organization" && server.fundingStatus === "revoked") return false;
   switch (server.state) {
     case "awaiting_payment":
     case "creating":

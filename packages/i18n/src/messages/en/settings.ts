@@ -432,6 +432,12 @@ export const messages = defineMessages("settings", {
   "settings.hostedServers.description": "Each server has its own agents, files and routines.",
   "settings.hostedServers.add": "Add server",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB memory, {disk} GB storage",
+  "settings.hostedServers.organizationFunded": "Organization funded",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB memory, {disk} GB persistent storage · {region}",
+  "settings.hostedServers.administratorStopped": "Administrator-managed stop",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Organization funding is inactive. Ask your administrator to restore funding before you start this server.",
   "settings.hostedServers.creating": "Creating…",
   "settings.hostedServers.usageNote":
     "A server stops about 15 minutes after the last message or change, also when an app is open. A key press or click in the app, a message, or a scheduled routine starts it again. Its agents and routines work when this computer is off.",

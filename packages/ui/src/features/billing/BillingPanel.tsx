@@ -6,6 +6,7 @@ import {
   type BillingServerPlan,
   type BillingSubscriptionStatus,
 } from "@openbot/contracts/billing";
+import type { HostedServerSummary } from "@openbot/contracts/hosted-servers";
 import type { AppTextKey } from "@openbot/i18n";
 import {
   Alert,
@@ -78,24 +79,33 @@ export interface BillingPanelProps {
 }
 
 /**
- * The Billing content of the desktop Settings tab and the web dialog: the plan of each server that
- * the account pays for, with the Stripe Customer Portal for plan changes, the payment method and
- * the invoices. The plan of a new server is chosen where the server is made, not here.
+ * The account's Stripe plans and organization-funded hosts. Stripe handles subscription payments;
+ * organization funding is independent of Stripe availability. Plans are chosen when a server is made.
  */
 export function BillingPanel(props: BillingPanelProps): JSX.Element {
   const { t } = useText();
   const billing = () => props.store.state.billing;
   const unavailable = () => !props.available || billing()?.available === false;
+  const organizationOnly = () => {
+    const servers = props.hostedServers?.state.servers;
+    return Boolean(
+      servers?.length && servers.every((server) => server.funding === "organization") && !billing()?.servers.length,
+    );
+  };
   const managing = () => props.store.state.pending === "manage";
   const managedServers = () =>
     props.hostedServers?.state.lifecycleAvailable
-      ? props.hostedServers.state.servers.filter((server) =>
-          billing()?.servers.some(
-            (plan) =>
-              plan.serverId === server.serverId &&
-              plan.currentPeriodEnd !== null &&
-              (plan.status === "active" || plan.status === "trialing"),
-          ),
+      ? props.hostedServers.state.servers.filter(
+          (server): server is Extract<HostedServerSummary, { funding: "stripe" }> =>
+            server.funding === "stripe" &&
+            Boolean(
+              billing()?.servers.some(
+                (plan) =>
+                  plan.serverId === server.serverId &&
+                  plan.currentPeriodEnd !== null &&
+                  (plan.status === "active" || plan.status === "trialing"),
+              ),
+            ),
         )
       : [];
   const managedIds = () => managedServers().map((server) => server.serverId);
@@ -122,7 +132,9 @@ export function BillingPanel(props: BillingPanelProps): JSX.Element {
       </Show>
       <Switch>
         <Match when={unavailable()}>
-          <Text tone="muted">{t("billing.unavailable")}</Text>
+          <Show when={!organizationOnly()}>
+            <Text tone="muted">{t("billing.unavailable")}</Text>
+          </Show>
         </Match>
         <Match when={!billing() && props.store.state.error}>
           {(message) => <BillingError message={message()} store={props.store} />}

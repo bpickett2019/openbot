@@ -3,9 +3,11 @@
 # docs/docker.md#several-instances-on-one-host.
 services:
   openbot:
-    image: ghcr.io/nightly-labs/openbot:${OPENBOT_TAG:-latest}
+    image: ghcr.io/bpickett2019/openbot:${OPENBOT_TAG:-latest}
     container_name: openbot-${OPENBOT_NAME:?}
     restart: unless-stopped
+    cap_drop:
+      - ALL
     security_opt:
       - seccomp=../seccomp.json
       - no-new-privileges:true

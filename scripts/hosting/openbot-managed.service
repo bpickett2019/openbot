@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenBot managed persistent-volume host
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/openbot-host/config.json
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/openbot-digitalocean-bootstrap run /etc/openbot-host/config.json
+# The supervisor stops OpenBot first. Its launcher keeps the display and keyring
+# alive until OpenBot closes its databases and stops its children.
+KillMode=process
+TimeoutStopSec=150
+Restart=no
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

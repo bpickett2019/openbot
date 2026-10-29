@@ -216,11 +216,12 @@ export const ServerDrawerContent = memo(function ServerDrawerContent({
     setListOpen(false);
   }, [open]);
 
-  // The plus button opens the plans and the account's hosted servers when the account can have
-  // hosted servers and the feature flag of this build is on. A development build can override both.
+  // Owners can always open their existing hosted servers, also when checkout is disabled.
+  // The feature flag controls new plan offers, not access to the owner's list.
   const accountHasPlans = useHostedServerAvailability((state) => state.userId === session.user.id && state.available);
   const cloudServersOn = useMobileFeature(session.apiUrl, "cloudServers");
-  const showsPlans = devFeatureOverride("cloudServers") ?? (accountHasPlans && cloudServersOn);
+  const showsPlans =
+    (hostedServerIds?.size ?? 0) > 0 || (devFeatureOverride("cloudServers") ?? (accountHasPlans && cloudServersOn));
   useEffect(() => {
     if (!open) return;
     void refreshHostedServerAvailability(session.user.id, hostedServerCalls(session));

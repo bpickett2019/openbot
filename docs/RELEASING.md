@@ -30,13 +30,13 @@ blocked version is no longer offered, but it stays on the computers that already
 
 ## One-time GitHub setup
 
-Create the `release` environment in `nightly-labs/openbot`, then add these environment secrets:
+Create the `release` environment in `bpickett2019/openbot`, then add your own environment secrets:
 
 - `CSC_LINK` — a base64-encoded Developer ID Application `.p12` file.
 - `MAC_PROVISIONING_PROFILE` — the base64-encoded Developer ID provisioning profile for
   `app.openbot.desktop`, with the `applinks:openbot.run` entitlement.
 - `CSC_KEY_PASSWORD` — the application `.p12` export password.
-- `CSC_INSTALLER_LINK` — a base64-encoded **Developer ID Installer** `.p12` file for team `ZTRDTUL87R`.
+- `CSC_INSTALLER_LINK` — a base64-encoded **Developer ID Installer** `.p12` file for your own Apple team.
 - `CSC_INSTALLER_KEY_PASSWORD` — the installer `.p12` export password.
 - `APPLE_ID` — the Apple Account used for notarization.
 - `APPLE_APP_SPECIFIC_PASSWORD` — a dedicated app-specific password for `notarytool`.
@@ -52,18 +52,16 @@ The Docker image needs no secret: the `docker-publish` job pushes with `GITHUB_T
 even when the source repository is public. A successful push does not confirm public access.
 
 After the first push, a package administrator must open the
-[OpenBot package](https://github.com/orgs/nightly-labs/packages/container/package/openbot):
+[OpenBot package under your account](https://github.com/bpickett2019?tab=packages):
 
 1. Open **Package settings** and set **Change visibility** to **Public**.
-2. Check that the package is linked to `nightly-labs/openbot`. The Dockerfile sets the
+2. Check that the package is linked to `bpickett2019/openbot`. The Dockerfile sets the
    `org.opencontainers.image.source` label for this link.
-3. Under **Manage Actions access**, check that `nightly-labs/openbot` has write access.
+3. Under **Manage Actions access**, check that `bpickett2019/openbot` has write access.
 
-If **Public** is disabled by organization administrators, an organization owner must enable
-**Public** under **Package creation** in the
-[organization package settings](https://github.com/organizations/nightly-labs/settings/packages).
-Make OpenBot public, then restore the previous organization policy. Existing public packages stay
-public when this creation permission is disabled again.
+Use the package owned by `bpickett2019`, not the upstream organization's package. If you later
+move the fork to an organization, its package policy must permit the intended visibility.
+Changing package visibility is a publication step; do not change upstream organization settings.
 
 If a release pushed its image but users cannot pull it, check these settings first. Changing
 visibility makes the existing tags public; no rebuild is needed. Tags `0.30.0` and `0.31.0` have
@@ -73,8 +71,8 @@ Check access with an empty Docker configuration, so a saved login cannot hide th
 
 ```sh
 anonymous_config=$(mktemp -d)
-docker --config "$anonymous_config" manifest inspect ghcr.io/nightly-labs/openbot:latest
-docker --config "$anonymous_config" manifest inspect ghcr.io/nightly-labs/openbot:0.30.0
+docker --config "$anonymous_config" manifest inspect ghcr.io/bpickett2019/openbot:latest
+docker --config "$anonymous_config" manifest inspect ghcr.io/bpickett2019/openbot:<published-version>
 rm -rf "$anonymous_config"
 ```
 
@@ -82,47 +80,25 @@ The release workflow checks anonymous access to the version, `v<version>` and `l
 including both Linux architectures. A failure leaves the GitHub Release and pushed images in
 place. Correct the package settings, then run the failed job again.
 
-## Hosted-server snapshots
+## Managed host images
 
-After GitHub publication, `Publish boat server snapshot` builds the Linux x64 release into a boat
-named snapshot (`openbot-server-production-<version>` with dots replaced by hyphens), then selects
-it for new production servers. It uses the tagged hosting scripts,
-the published `SHA256SUMS-linux.txt`, and `https://api.openbot.run`. The builder checks the AppImage
-checksum and installed version and requires an empty host profile before saving the snapshot.
-Existing servers and the test Worker do not change.
+The fork no longer builds or selects Boat snapshots. The Linux release includes the managed
+DigitalOcean bootstrap bundle and checksums. Publish a verified fork image, then prepare an owned
+Ubuntu 24.04 Droplet image with `scripts/hosting/provision-digitalocean-image.sh`.
 
-Before the first release with this job, configure the `cloudflare-production` GitHub Environment:
+The managed account configuration requires the real numeric Droplet image ID, exact
+`ghcr.io/bpickett2019/openbot@sha256:<digest>` and matching `HOSTED_OPENBOT_VERSION`. No moving-tag
+or upstream binary fallback is permitted. Release publication, image preparation and paid runtime
+each need the applicable approval; a successful CI build alone authorizes none of them.
 
-- Add `BOAT_TEMPLATE_API_KEY`, a separate boat key with sandbox, file, command and named snapshot
-  access. Keep the limited `BOAT_API_KEY` on the Worker.
-- Keep `CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN` and the `CLOUDFLARE_ACCOUNT_ID` variable used by deployment.
-- Permit the tag pattern `v*.*.*` in addition to the `main` branch. The release job runs on a tag.
+Do not put an initialized host profile or reusable credentials in the base image. The desktop's
+native state belongs on a separately retained ext4 Volume. Image replacement retains that volume,
+requires single-writer exclusion and refuses schema downgrades. VM replacement and backups need
+real acceptance evidence; see [hosted servers](hosted-servers.md#build-the-server-image).
 
-`release:preflight` checks these settings. The hosted job and production Worker deployment share
-one concurrency group. The job checks GitHub's latest stable release before building and again
-before selection. It writes only the Worker's `HOSTED_SERVER_TEMPLATE` secret. Normal CI and local
-production deployments preserve it; the old GitHub variable is ignored. `hosting:setup` now sets
-up billing and webhooks only and no longer accepts `--template`.
-
-A failed hosted job leaves the GitHub Release published and the previous template selected.
-Run the failed job again after correcting the cause. A ready snapshot is reused; a save in progress
-is polled; a failed snapshot requires operator inspection. The builder never replaces an existing
-snapshot. It stops at 10 snapshots even if boat permits paid storage above that count.
-
-Before the build, the job removes production snapshots of older releases. It keeps the 2 newest
-ready ones, so 3 releases remain with the new one; the newest of them stays selected until the new
-release replaces it. A failed snapshot of an older release is removed too. It keeps a snapshot that
-is saving or has an unknown status, any snapshot newer than the release, and each
-`provider_template` of a production server that is not deleted and has no sandbox yet, because a
-create retry sends its first request again. The job reads these from the production D1
-database and stops if it cannot. Servers already made from a removed snapshot keep running. Names
-without the `openbot-server-production-` prefix are never removed; confirm that neither Worker nor
-any pending create needs one before removing it by hand.
-
-A successful job reports the selected version in its Actions summary. Verify the first rollout by
-creating a temporary production server and checking its initial installed version. Record the
-result under `.openbot-build/`; remove only that temporary server after the check. This remote check
-is separate from local checks and requires production access.
+`hosting:setup` now controls the organization allocation and funding. It does not configure Stripe
+or provider webhooks and does not promote images. The account deployer refuses non-deleted legacy
+Boat rows before migration/deployment; never reset them to bypass the gate.
 
 ## Windows signing
 
@@ -465,15 +441,12 @@ previous release; the file holds only one version.
 `scripts/discord-release-announcement.ts` builds the message: a mention of the `Release Pings`
 role, the title `OpenBot vx.y.z is out`, the highlights, and a link to the version on `/changelog`.
 It notifies only that role, not `@everyone` or `@here`. Run
-`bun scripts/discord-release-announcement.ts check x.y.z` to see it. The tag workflow and
-`bun run release:preflight` stop when the file is not for the release version, has fewer than 3 or
-more than 5 highlights, has a highlight that is empty or has a placeholder, a line break or a
-mention, or makes a message longer than 2000 characters. They also stop when the
-`DISCORD_RELEASE_ROLE_ID` repository variable is not set or is not a Discord role ID. After the GitHub Release, the Docker image and the
-boat snapshot are published, the `discord-announce` job posts the message as OpenBot through the
-channel webhook in the `DISCORD_RELEASE_WEBHOOK_URL` secret of the `release` environment. The job
-fails, and posts nothing, when `DISCORD_RELEASE_ROLE_ID` is not set. A failed post does not undo the
-release: re-run the job. A re-run after a successful post posts the message again.
+`bun scripts/discord-release-announcement.ts check x.y.z` to inspect an intended announcement.
+The fork's `discord-announce` job is opt-in through `ENABLE_DISCORD_RELEASE_ANNOUNCEMENTS=true`;
+do not publish to an upstream channel. When enabled, use your own role and webhook configuration
+and verify the release highlights. The job runs after the GitHub Release and Docker image jobs.
+It does not publish a hosted-provider snapshot. A failed announcement does not undo the release,
+and repeating a successful post sends another message.
 
 One-time setup:
 
@@ -552,13 +525,13 @@ The workflow:
 10. builds a Docker image (`docker/Dockerfile`) from each Linux AppImage on a runner of that
     architecture, after it checks the AppImage against its `SHA256SUMS` file. It starts each image
     with `docker/seccomp.json`, waits for `openbot status`, and stops it, which must exit with 0;
-11. after the GitHub Release is published, pushes both images to `ghcr.io/nightly-labs/openbot`
+11. after the GitHub Release is published, pushes both images to `ghcr.io/bpickett2019/openbot`
     with the tags `<version>-amd64` and `<version>-arm64`, joins them under `<version>`, `v<version>`,
     `latest` and `sha-<commit>`, and attests the build provenance of that image. It then checks
     anonymous access to both architectures. See [Docker](docker.md).
 
 Users can verify a downloaded artifact with
-`gh attestation verify <file> --repo nightly-labs/openbot`.
+`gh attestation verify <file> --repo bpickett2019/openbot`.
 
 Before a tag, run the release path without publishing:
 

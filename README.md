@@ -320,7 +320,7 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 
 | Command | Purpose |
 | --- | --- |
-| `bun run dev` | Start the local Auth API, Signal service, and Electron client with renderer HMR on its app profile. Ports are allocated through the dev registry, so a sibling worktree never takes one this stack won. It refuses a second stack in the same worktree unless you pass `--force`. Each worktree opens a profile of its own, keyed to its path; `--shared` opens the shared `OpenBot Dev` profile instead. `--isolated` is still accepted and changes nothing. A profile that you used before stays on disk unchanged. `--hosting=test` signs the app in to the `test` account Worker, on a profile that all worktrees share, so that a hosted server is a real VM; see [docs/hosted-servers.md](docs/hosted-servers.md#real-servers-from-a-development-build). A profile that does not exist yet is seeded with the showcase data of `bun run dev:seed` before the client starts, so a first start never opens an empty app; an existing profile is left as it is. An isolated profile still shares the computer's provider CLI store, so it does not download the pinned CLIs again. Before it starts, it runs `bun install --frozen-lockfile` and `bun run api:migrate:local` only when `bun.lock`, a workspace `package.json`, a patch, or a migration changed since their last successful run. The stamps are in `node_modules` and `apps/auth-api/.wrangler/state/v3/d1`, and each `bun install` writes the install stamp too; delete one to run its step again. |
+| `bun run dev` | Start the local Auth API, Signal service, and Electron client with renderer HMR on its app profile. Ports are allocated through the dev registry, so a sibling worktree never takes one this stack won. It refuses a second stack in the same worktree unless you pass `--force`. Each worktree opens a profile of its own, keyed to its path; `--shared` opens the shared `OpenBot Dev` profile instead. `--isolated` is still accepted and changes nothing. A profile that you used before stays on disk unchanged. Real organization-funded cloud hosts require explicit owned services, operator authorization and spending approval; see [docs/hosted-servers.md](docs/hosted-servers.md#real-servers-from-a-development-build). A profile that does not exist yet is seeded with the showcase data of `bun run dev:seed` before the client starts, so a first start never opens an empty app; an existing profile is left as it is. An isolated profile still shares the computer's provider CLI store, so it does not download the pinned CLIs again. Before it starts, it runs `bun install --frozen-lockfile` and `bun run api:migrate:local` only when `bun.lock`, a workspace `package.json`, a patch, or a migration changed since their last successful run. The stamps are in `node_modules` and `apps/auth-api/.wrangler/state/v3/d1`, and each `bun install` writes the install stamp too; delete one to run its step again. |
 | `bun run preview` | Preview the built Electron client with the green preview icon. |
 | `bun run mobile:go` | Start the mobile app in Expo Go and clear the Metro cache. |
 | `bun mobile:ios` | Build and launch the iOS simulator app without RocketSim. |
@@ -335,16 +335,14 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 | `bun run api:images` | Draw the article artwork into `apps/auth-api/content-art/` after you add an article or change a title. Commit the result; the site build fails until it matches. Needs Electron and a GPU, so run it on your own machine. |
 | `bun run api:migrate:local` | Apply D1 migrations to the local development database. |
 | `bun run api:migrate:remote` | Apply D1 migrations to the configured remote database. |
-| `bun run api:deploy` | Build and deploy the account API to Cloudflare Workers. It sets the Stripe, boat, claim and OpenPanel secret sets that are in the production environment. A set that is not there keeps the value that the Worker has. |
+| `bun run api:deploy` | Preflight owned Cloudflare resources, upload explicitly supplied secrets, apply D1 migrations, build and deploy the owned account Worker. Use `bun scripts/deploy-auth-api.ts --self-hosted --check` for a no-network input check. |
 | `bun run api:stripe:bootstrap` | Create or update the Stripe plan catalog and the Customer Portal settings from `STRIPE_SECRET_KEY` in the encrypted `apps/auth-api/.env.dev` (shell values replace it). It refuses a live key unless you add `--live`. For local webhooks, run `stripe listen --forward-to localhost:<API port>/v1/stripe/webhook` and set the signing secret in `STRIPE_WEBHOOK_SECRET`. See [Billing](docs/architecture/servers.md#billing). |
-| `bun run hosting:setup --target=production\|test` | Set up the Stripe catalog, the Customer Portal, and the Stripe and boat webhooks of one account server, and store the webhook signing secrets: production in the `cloudflare-production` GitHub Environment, test in the encrypted `apps/auth-api/.env.dev`. See [hosted servers](docs/hosted-servers.md#production). |
-| `bun run hosting:template` | Build the boat named snapshot that new hosted servers start from. Needs `BOAT_TEMPLATE_API_KEY` and `--version`, `--appimage-url`, `--appimage-sha256` and `--auth-api-url`. See [hosted servers](docs/hosted-servers.md). |
+| `bun run hosting:setup list\|create\|revoke\|reactivate` | Operator-only organization-host lifecycle. Mutations preview by default and require `--execute` plus spending approval. See [hosted servers](docs/hosted-servers.md#operator-api). |
 | `bun run status:build` | Build the public status page in `apps/status/dist`. The `status-page` workflow adds `status.json` and `feed.xml` and publishes it to GitHub Pages at `status.openbot.run`. |
 | `bun run status:smoke` | Run the status page smoke test: update runs against a local fake service, the status webhooks against a local receiver, one read-only run against the live checks, and the built page in Chrome. It writes `.openbot-build/status-page/report.json`. |
-| `bun run remote:up` | Build and start the self-hosted Signal, coturn, and ACME stack. |
-| `bun run remote:check` | Check the Remote API and both Docker Compose configurations. |
-| `bun run remote:check:compose` | Validate both Docker Compose configurations alone, without a running daemon. |
-| `bun run remote:update` | Update Signal, then drain and update the single coturn instance. |
+| `bun run remote:check` | Check the Remote API and local development Compose configuration. |
+| `bun run remote:check:compose` | Validate the development Compose configuration without starting a daemon. |
+| `bun run remote:update --deploy` | Deploy owned Cloudflare Signal disabled. `--enable` requires runtime approval; TURN uses Cloudflare Realtime. |
 | `bun run dev:all` | Start the Auth API, Signal service, and single local Electron instance. |
 | `bun run dev:slack` | Start the same stack as `bun run dev`, with two `cloudflared` quick tunnels, one to Signal and one to the local account API, so that Slack can send the development Slack app's events and install return to the agents on this computer. It reads `OPENBOT_DEV_SLACK_SIGNING_SECRET` from the ignored `.env.slack-dev`, and needs `SLACK_ROUTE_PRIVATE_JWK` and `SLACK_ROUTE_KEY_ID` in the shell environment. Takes the same options as `bun run dev`, such as `--shared`. See [docs/messaging.md](docs/messaging.md#test-slack-locally). |
 | `bun run dev:test-client` | Start the Auth API, Signal service, local instance, and an isolated second client for team testing. |
@@ -408,9 +406,10 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 
 Publishing never creates a second OpenBot instance. The host keeps its Team API on loopback. A hidden,
 sandboxed Electron page connects it to invited clients through WebRTC. Signal carries only connection
-setup messages. Team data uses direct DataChannels when possible and the project coturn service when
-direct ICE fails. Cloudflare stores accounts, configuration, memberships, invitations, logical session
-records, and public assets. It does not carry chats, files, commands, or remote desktop media.
+setup messages. Team data uses direct DataChannels when possible and encrypted Cloudflare Realtime
+TURN when direct ICE fails. Cloudflare also stores accounts, configuration, memberships, invitations,
+logical sessions and public assets. Signal/account services do not store desktop chats, files,
+commands or media, but Cloudflare is on the encrypted relay data path.
 
 The development runner advertises both Mobile Connect and its Signal service on the preferred private
 LAN interface. Restart the runner after changing networks so newly generated QR codes contain the
@@ -425,8 +424,8 @@ use a VPN that connects both devices, or provide HTTPS and WSS endpoints that fo
 stack's account API and Signal ports. Set `OPENBOT_MOBILE_AUTH_API_URL` to the reachable account API
 origin and `REMOTE_SIGNAL_URL` to the reachable Signal URL, including `/v1/signal`, before starting
 `bun run dev`. Use the ports reported by `bun run dev:status`; they can differ between worktrees.
-If direct WebRTC cannot connect, `TURN_HOST` must name a reachable coturn service and
-`TURN_SHARED_SECRET` must match that service. An HTTP tunnel cannot forward TURN traffic.
+If direct WebRTC cannot connect, Signal needs owned `CLOUDFLARE_TURN_KEY_ID` and
+`CLOUDFLARE_TURN_API_TOKEN` inputs. An HTTP tunnel is not a TURN relay.
 Generate and scan a new Mobile Connect code after changing the account API address; an existing
 mobile session retains its original address.
 
@@ -445,7 +444,7 @@ machine running several worktrees those kill the other checkouts' work mid-write
 `dev:status` and `dev:stop` exist to make unnecessary.
 
 Set `OPENBOT_DEV_ICE_TRANSPORT_POLICY=relay` before this command to force Team API traffic through
-coturn. This test option works only with the development renderer. Production always starts with `all`.
+Cloudflare Realtime TURN. This option works only with the development renderer. Production starts with `all`.
 
 The normal `check` command is offline and uses a fake App Server. Manual smoke scripts may use the
 signed-in subscription and must not run in CI.

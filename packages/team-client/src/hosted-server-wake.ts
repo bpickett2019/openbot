@@ -48,7 +48,9 @@ const NEW_OUTAGE_MS = 2 * 60_000;
 export function hostedStartStep(server: {
   state: HostedServerState;
   error: HostedServerError | null;
+  fundingStatus?: "active" | "revoked";
 }): HostedServerStartStep | null {
+  if (server.fundingStatus === "revoked") return null;
   if (server.state === "stopped") return server.error === null ? "machine" : null;
   if (!WAKE_RECONNECT_STATES.has(server.state) || server.error === "plan_ended") return null;
   if (server.state === "running") return "openbot";
@@ -127,7 +129,7 @@ export function createHostedServerWake<E, R>(
         // Not a hosted server of this account, or a server whose plan ended: a wake cannot start it.
         // Any other failure can pass, so the next failure asks again.
         if (response.status === 404) notHostedAt.set(hostId, time);
-        if (response.status === 402) gaveUpAt.set(hostId, time);
+        if (response.status === 402 || response.status === 403) gaveUpAt.set(hostId, time);
         return false;
       }
       const value = yield* Effect.tryPromise({
@@ -135,7 +137,11 @@ export function createHostedServerWake<E, R>(
         catch: () => new HostedServerWakeError({}),
       }).pipe(Effect.catch(() => Effect.succeed(null)));
       const server = parseHostedServerSummary(value);
-      if (!server || !WAKE_RECONNECT_STATES.has(server.state)) {
+      if (
+        !server ||
+        (server.funding === "organization" && server.fundingStatus === "revoked") ||
+        !WAKE_RECONNECT_STATES.has(server.state)
+      ) {
         attempts.delete(hostId);
         return false;
       }
@@ -203,6 +209,7 @@ export function createHostedServerStatusCheck<E, R>(
       ),
     );
     if (!status) return "offline";
+    if (status.fundingStatus === "revoked") return "offline";
     if (status.sleeping) return remember(hostId, "sleeping", time);
     if (status.error === "plan_ended") return remember(hostId, "ended", time);
     known.delete(hostId);

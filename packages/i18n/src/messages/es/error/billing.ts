@@ -5,9 +5,9 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "No se pudo cambiar el plan del servidor. Actualiza Facturación e inténtalo de nuevo.",
   "error.billing.confirmMismatch": "Escribe el nombre del servidor para eliminarlo.",
-  "error.billing.restartBusy": "El servidor no puede reiniciarse ahora. Inténtalo de nuevo en un minuto.",
-  "error.billing.planRequired": "El plan de este servidor terminó. Renuévalo para iniciar el servidor.",
-  "error.billing.planSoldOut": "Este plan está agotado. Elige otro plan.",
+  "error.billing.organizationManaged": "Un administrador gestiona este host. No se puede pagar ni cambiar de plan.",
+  "error.billing.fundingRevoked":
+    "La financiación está inactiva. Pide al administrador que la restablezca antes de iniciar este servidor.",
   "error.billing.licenseExists": "Esta cuenta ya tiene una licencia. Cambia sus usuarios en su lugar.",
   "error.billing.licenseCurrency": "La licencia debe usar la moneda de tus otros planes.",
   "error.billing.licenseUsersInUse": "La licencia no puede tener menos usuarios que las personas que la usan ahora.",

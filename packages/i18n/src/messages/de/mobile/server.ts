@@ -81,6 +81,14 @@ export const messages = {
   "mobile.server.hosted.currentPlan": "Dein Tarif",
   "mobile.server.hosted.soldOut": "Ausverkauft",
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "Organisationsfinanziert",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB Arbeitsspeicher, {disk} GB dauerhafter Speicher · {region}",
+  "mobile.server.hosted.administratorStopped": "Administrativ gestoppt",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "Die Finanzierung ist inaktiv. Bitte deinen Administrator, sie vor dem Serverstart wieder zu aktivieren.",
+  "mobile.server.hosted.organizationDescription":
+    "Deine Organisation verwaltet diesen gemeinsamen Server. Mitarbeitende treten mit einer Einladung bei.",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · Endet am {date}",
   "mobile.server.hosted.state.payment": "Wartet auf Zahlung",
   "mobile.server.hosted.state.setup": "Wird eingerichtet",

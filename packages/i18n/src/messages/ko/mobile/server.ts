@@ -78,6 +78,13 @@ export const messages = {
   "mobile.server.hosted.currentPlan": "내 요금제",
   "mobile.server.hosted.soldOut": "품절",
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "조직 비용 지원",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · vCPU {vcpu}개, 메모리 {memory}GB, 영구 저장소 {disk}GB · {region}",
+  "mobile.server.hosted.administratorStopped": "관리자에 의한 중지",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "조직의 비용 지원이 비활성 상태예요. 서버를 시작하려면 관리자에게 지원 재개를 요청하세요.",
+  "mobile.server.hosted.organizationDescription": "조직에서 이 공유 서버를 관리해요. 직원은 초대로 참여해요.",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · {date} 종료",
   "mobile.server.hosted.state.payment": "결제 대기 중",
   "mobile.server.hosted.state.setup": "설정 중",

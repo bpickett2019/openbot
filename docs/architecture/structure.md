@@ -22,7 +22,7 @@ packages/
   user-errors/       Shared user-facing error messages for desktop and mobile
 remote/
   api/               Bun Signal service for SDP, ICE, ticket checks, TURN credentials, and the Slack, Discord, Telegram and webhook relays
-  scripts/           Bun checks and update commands for Signal and coturn
+  scripts/           Bun checks and explicit Cloudflare Signal deployment commands
 src/
   backend/           Agent runtime, provider adapters, event storage, queues, and browser host
   main/              Electron lifecycle, trusted IPC, host server, and operating-system adapters

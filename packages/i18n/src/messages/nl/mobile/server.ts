@@ -78,6 +78,14 @@ export const messages = {
   "mobile.server.hosted.currentPlan": "Je abonnement",
   "mobile.server.hosted.soldOut": "Uitverkocht",
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "Door organisatie gefinancierd",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB geheugen, {disk} GB permanente opslag · {region}",
+  "mobile.server.hosted.administratorStopped": "Door beheerder gestopt",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "De financiering is niet actief. Vraag je beheerder deze te herstellen voordat je deze server start.",
+  "mobile.server.hosted.organizationDescription":
+    "Je organisatie beheert deze gedeelde server. Medewerkers nemen deel via een uitnodiging.",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · Eindigt op {date}",
   "mobile.server.hosted.state.payment": "Wacht op betaling",
   "mobile.server.hosted.state.setup": "Wordt ingericht",

@@ -2,7 +2,7 @@
  * The first start of a hosted server: a VM that the account server created for one account. It runs
  * only in a packaged Linux build that the server template starts with `OPENBOT_HOSTED_SERVER=1`.
  *
- * The VM gets a host ID and a single-use claim. The claim becomes the owner's account session, and
+ * The VM gets a host ID and a bounded bootstrap claim. The claim becomes the owner's account session, and
  * the host is configured with the ID that the account server reserved for that owner. It then
  * publishes at launch like any other host. Nothing here goes through IPC: the renderer never sees
  * the claim or the session.

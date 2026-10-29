@@ -407,6 +407,12 @@ export const messages = {
   "settings.hostedServers.description": "각 서버는 자체 에이전트, 파일, 루틴을 가져요.",
   "settings.hostedServers.add": "서버 추가",
   "settings.hostedServers.planSpec": "{plan} · vCPU {vcpu}개, 메모리 {memory}GB, 저장소 {disk}GB",
+  "settings.hostedServers.organizationFunded": "조직 비용 지원",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · vCPU {vcpu}개, 메모리 {memory}GB, 영구 저장소 {disk}GB · {region}",
+  "settings.hostedServers.administratorStopped": "관리자에 의한 중지",
+  "settings.hostedServers.fundingRevokedDescription":
+    "조직의 비용 지원이 비활성 상태예요. 서버를 시작하려면 관리자에게 지원 재개를 요청하세요.",
   "settings.hostedServers.creating": "생성 중…",
   "settings.hostedServers.usageNote":
     "서버는 마지막 메시지나 변경 후 약 15분이 지나면 중지돼요. 앱이 열려 있어도 마찬가지예요. 앱에서 키를 누르거나 클릭하거나, 메시지를 보내거나, 예약된 루틴이 있으면 다시 시작돼요. 에이전트와 루틴은 이 컴퓨터가 꺼져 있어도 작동해요.",

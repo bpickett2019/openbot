@@ -84,6 +84,12 @@ export const messages = {
   "mobile.server.hosted.soldOut": "已售罄",
   // The plan and the billing period of one server of the account, such as "Standard · Yearly". {date} is a date.
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "组织出资",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} 核 vCPU、{memory} GB 内存、{disk} GB 持久存储 · {region}",
+  "mobile.server.hosted.administratorStopped": "由管理员停用",
+  "mobile.server.hosted.fundingRevokedDescription": "组织资助未启用。请让管理员恢复资助后再启动该服务器。",
+  "mobile.server.hosted.organizationDescription": "该共享服务器由你的组织管理。员工通过邀请加入。",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · {date} 到期",
   "mobile.server.hosted.state.payment": "等待付款",
   "mobile.server.hosted.state.setup": "正在配置",

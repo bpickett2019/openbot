@@ -20,13 +20,12 @@ export type HostedBillingBindings = HostedServerBindings &
     >
   >;
 
-/**
- * Billing and hosted servers, linked in both directions: a server starts a Checkout, and a stored
- * subscription starts or stops its server. Billing is null when the deployment has no Stripe key.
+/** One constructor supplies shared entitlement notifications for requests and scheduled work.
+ * Stripe remains optional and cannot fund or change an organization allocation.
  */
 export function createHostedBilling(
   bindings: HostedBillingBindings,
-  options: Pick<HostedServerServiceOptions, "removeHost" | "developerKey"> & {
+  options: Pick<HostedServerServiceOptions, "removeHost"> & {
     /** Tells the members of a host that its plan, and so its member limit, can be different. */
     planChanged: (hostId: string) => Effect.Effect<void, RemoteFailure>;
     /** Keeps the Worker alive until an analytics send or a server start command ends (`waitUntil`). */
@@ -64,9 +63,7 @@ export function createHostedBilling(
     : null;
   const hosting = new HostedServerService(bindings, {
     removeHost: options.removeHost,
-    developerKey: options.developerKey ?? null,
-    billing,
-    analytics,
+    planChanged: options.planChanged,
     schedule: options.schedule,
   });
   return { billing, hosting };

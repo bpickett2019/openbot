@@ -109,7 +109,6 @@ import { Route as V1SkillsSkillIdContentRouteImport } from './routes/v1/skills/$
 import { Route as V1SkillsSkillIdIconRouteImport } from './routes/v1/skills/$skillId/icon'
 import { Route as V1SkillsSkillIdInstallRouteImport } from './routes/v1/skills/$skillId/install'
 import { Route as V1SkillsAdminSubmissionsRouteImport } from './routes/v1/skills/admin/submissions'
-import { Route as V2HostingBoatWebhookRouteImport } from './routes/v2/hosting/boat/webhook'
 import { Route as V2HostingClaimsRedeemRouteImport } from './routes/v2/hosting/claims/redeem'
 import { Route as V2HostingServersIndexRouteImport } from './routes/v2/hosting/servers/index'
 import { Route as V2RemoteDiscordRouteReconcileRouteImport } from './routes/v2/remote/discord-route/reconcile'
@@ -135,6 +134,7 @@ import { Route as V1SitesUploadsUploadIdFileRouteImport } from './routes/v1/site
 import { Route as V1SkillsSkillIdVersionsVersionIdRouteImport } from './routes/v1/skills/$skillId/versions/$versionId'
 import { Route as V1SkillsAdminFeaturedSkillIdRouteImport } from './routes/v1/skills/admin/featured/$skillId'
 import { Route as V1SkillsAdminSubmissionsVersionIdRouteImport } from './routes/v1/skills/admin/submissions/$versionId'
+import { Route as V2HostingOrganizationServersIndexRouteImport } from './routes/v2/hosting/organization/servers/index'
 import { Route as V2HostingServersServerIdIndexRouteImport } from './routes/v2/hosting/servers/$serverId/index'
 import { Route as V2HostingServersServerIdActivityRouteImport } from './routes/v2/hosting/servers/$serverId/activity'
 import { Route as V2HostingServersServerIdCheckoutRouteImport } from './routes/v2/hosting/servers/$serverId/checkout'
@@ -164,6 +164,7 @@ import { Route as V2RemoteSessionsSessionIdTicketRouteImport } from './routes/v2
 import { Route as V1MarketplaceAgentsAdminFeaturedAgentIdRouteImport } from './routes/v1/marketplace/agents/admin/featured/$agentId'
 import { Route as V1MarketplaceAgentsAdminSubmissionsVersionIdRouteImport } from './routes/v1/marketplace/agents/admin/submissions/$versionId'
 import { Route as V1SkillsSkillIdVersionsVersionIdContentRouteImport } from './routes/v1/skills/$skillId/versions/$versionId/content'
+import { Route as V2HostingOrganizationServersServerIdFundingRouteImport } from './routes/v2/hosting/organization/servers/$serverId/funding'
 import { Route as V2RemoteHostsHostIdMembersIndexRouteImport } from './routes/v2/remote/hosts/$hostId/members/index'
 import { Route as V2RemoteHostsHostIdMembersMembershipIdRouteImport } from './routes/v2/remote/hosts/$hostId/members/$membershipId'
 
@@ -677,11 +678,6 @@ const V1SkillsAdminSubmissionsRoute =
     path: '/v1/skills/admin/submissions',
     getParentRoute: () => rootRouteImport,
   } as any)
-const V2HostingBoatWebhookRoute = V2HostingBoatWebhookRouteImport.update({
-  id: '/v2/hosting/boat/webhook',
-  path: '/v2/hosting/boat/webhook',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const V2HostingClaimsRedeemRoute = V2HostingClaimsRedeemRouteImport.update({
   id: '/v2/hosting/claims/redeem',
   path: '/v2/hosting/claims/redeem',
@@ -821,6 +817,12 @@ const V1SkillsAdminSubmissionsVersionIdRoute =
     id: '/$versionId',
     path: '/$versionId',
     getParentRoute: () => V1SkillsAdminSubmissionsRoute,
+  } as any)
+const V2HostingOrganizationServersIndexRoute =
+  V2HostingOrganizationServersIndexRouteImport.update({
+    id: '/v2/hosting/organization/servers/',
+    path: '/v2/hosting/organization/servers/',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const V2HostingServersServerIdIndexRoute =
   V2HostingServersServerIdIndexRouteImport.update({
@@ -995,6 +997,12 @@ const V1SkillsSkillIdVersionsVersionIdContentRoute =
     path: '/content',
     getParentRoute: () => V1SkillsSkillIdVersionsVersionIdRoute,
   } as any)
+const V2HostingOrganizationServersServerIdFundingRoute =
+  V2HostingOrganizationServersServerIdFundingRouteImport.update({
+    id: '/v2/hosting/organization/servers/$serverId/funding',
+    path: '/v2/hosting/organization/servers/$serverId/funding',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const V2RemoteHostsHostIdMembersIndexRoute =
   V2RemoteHostsHostIdMembersIndexRouteImport.update({
     id: '/v2/remote/hosts/$hostId/members/',
@@ -1106,7 +1114,6 @@ export interface FileRoutesByFullPath {
   '/v1/skills/$skillId/icon': typeof V1SkillsSkillIdIconRoute
   '/v1/skills/$skillId/install': typeof V1SkillsSkillIdInstallRoute
   '/v1/skills/admin/submissions': typeof V1SkillsAdminSubmissionsRouteWithChildren
-  '/v2/hosting/boat/webhook': typeof V2HostingBoatWebhookRoute
   '/v2/hosting/claims/redeem': typeof V2HostingClaimsRedeemRoute
   '/v2/remote/discord-route/reconcile': typeof V2RemoteDiscordRouteReconcileRoute
   '/v2/remote/discord-route/removed': typeof V2RemoteDiscordRouteRemovedRoute
@@ -1159,11 +1166,13 @@ export interface FileRoutesByFullPath {
   '/v2/remote/hosts/$hostId/webhook-routes': typeof V2RemoteHostsHostIdWebhookRoutesRoute
   '/v2/remote/sessions/$sessionId/end': typeof V2RemoteSessionsSessionIdEndRoute
   '/v2/remote/sessions/$sessionId/ticket': typeof V2RemoteSessionsSessionIdTicketRoute
+  '/v2/hosting/organization/servers/': typeof V2HostingOrganizationServersIndexRoute
   '/v2/hosting/servers/$serverId/': typeof V2HostingServersServerIdIndexRoute
   '/v2/remote/hosts/$hostId/': typeof V2RemoteHostsHostIdIndexRoute
   '/v1/marketplace/agents/admin/featured/$agentId': typeof V1MarketplaceAgentsAdminFeaturedAgentIdRoute
   '/v1/marketplace/agents/admin/submissions/$versionId': typeof V1MarketplaceAgentsAdminSubmissionsVersionIdRoute
   '/v1/skills/$skillId/versions/$versionId/content': typeof V1SkillsSkillIdVersionsVersionIdContentRoute
+  '/v2/hosting/organization/servers/$serverId/funding': typeof V2HostingOrganizationServersServerIdFundingRoute
   '/v2/remote/hosts/$hostId/members/$membershipId': typeof V2RemoteHostsHostIdMembersMembershipIdRoute
   '/v2/remote/hosts/$hostId/members/': typeof V2RemoteHostsHostIdMembersIndexRoute
 }
@@ -1265,7 +1274,6 @@ export interface FileRoutesByTo {
   '/v1/skills/$skillId/icon': typeof V1SkillsSkillIdIconRoute
   '/v1/skills/$skillId/install': typeof V1SkillsSkillIdInstallRoute
   '/v1/skills/admin/submissions': typeof V1SkillsAdminSubmissionsRouteWithChildren
-  '/v2/hosting/boat/webhook': typeof V2HostingBoatWebhookRoute
   '/v2/hosting/claims/redeem': typeof V2HostingClaimsRedeemRoute
   '/v2/remote/discord-route/reconcile': typeof V2RemoteDiscordRouteReconcileRoute
   '/v2/remote/discord-route/removed': typeof V2RemoteDiscordRouteRemovedRoute
@@ -1318,11 +1326,13 @@ export interface FileRoutesByTo {
   '/v2/remote/hosts/$hostId/webhook-routes': typeof V2RemoteHostsHostIdWebhookRoutesRoute
   '/v2/remote/sessions/$sessionId/end': typeof V2RemoteSessionsSessionIdEndRoute
   '/v2/remote/sessions/$sessionId/ticket': typeof V2RemoteSessionsSessionIdTicketRoute
+  '/v2/hosting/organization/servers': typeof V2HostingOrganizationServersIndexRoute
   '/v2/hosting/servers/$serverId': typeof V2HostingServersServerIdIndexRoute
   '/v2/remote/hosts/$hostId': typeof V2RemoteHostsHostIdIndexRoute
   '/v1/marketplace/agents/admin/featured/$agentId': typeof V1MarketplaceAgentsAdminFeaturedAgentIdRoute
   '/v1/marketplace/agents/admin/submissions/$versionId': typeof V1MarketplaceAgentsAdminSubmissionsVersionIdRoute
   '/v1/skills/$skillId/versions/$versionId/content': typeof V1SkillsSkillIdVersionsVersionIdContentRoute
+  '/v2/hosting/organization/servers/$serverId/funding': typeof V2HostingOrganizationServersServerIdFundingRoute
   '/v2/remote/hosts/$hostId/members/$membershipId': typeof V2RemoteHostsHostIdMembersMembershipIdRoute
   '/v2/remote/hosts/$hostId/members': typeof V2RemoteHostsHostIdMembersIndexRoute
 }
@@ -1425,7 +1435,6 @@ export interface FileRoutesById {
   '/v1/skills/$skillId/icon': typeof V1SkillsSkillIdIconRoute
   '/v1/skills/$skillId/install': typeof V1SkillsSkillIdInstallRoute
   '/v1/skills/admin/submissions': typeof V1SkillsAdminSubmissionsRouteWithChildren
-  '/v2/hosting/boat/webhook': typeof V2HostingBoatWebhookRoute
   '/v2/hosting/claims/redeem': typeof V2HostingClaimsRedeemRoute
   '/v2/remote/discord-route/reconcile': typeof V2RemoteDiscordRouteReconcileRoute
   '/v2/remote/discord-route/removed': typeof V2RemoteDiscordRouteRemovedRoute
@@ -1478,11 +1487,13 @@ export interface FileRoutesById {
   '/v2/remote/hosts/$hostId/webhook-routes': typeof V2RemoteHostsHostIdWebhookRoutesRoute
   '/v2/remote/sessions/$sessionId/end': typeof V2RemoteSessionsSessionIdEndRoute
   '/v2/remote/sessions/$sessionId/ticket': typeof V2RemoteSessionsSessionIdTicketRoute
+  '/v2/hosting/organization/servers/': typeof V2HostingOrganizationServersIndexRoute
   '/v2/hosting/servers/$serverId/': typeof V2HostingServersServerIdIndexRoute
   '/v2/remote/hosts/$hostId/': typeof V2RemoteHostsHostIdIndexRoute
   '/v1/marketplace/agents/admin/featured/$agentId': typeof V1MarketplaceAgentsAdminFeaturedAgentIdRoute
   '/v1/marketplace/agents/admin/submissions/$versionId': typeof V1MarketplaceAgentsAdminSubmissionsVersionIdRoute
   '/v1/skills/$skillId/versions/$versionId/content': typeof V1SkillsSkillIdVersionsVersionIdContentRoute
+  '/v2/hosting/organization/servers/$serverId/funding': typeof V2HostingOrganizationServersServerIdFundingRoute
   '/v2/remote/hosts/$hostId/members/$membershipId': typeof V2RemoteHostsHostIdMembersMembershipIdRoute
   '/v2/remote/hosts/$hostId/members/': typeof V2RemoteHostsHostIdMembersIndexRoute
 }
@@ -1586,7 +1597,6 @@ export interface FileRouteTypes {
     | '/v1/skills/$skillId/icon'
     | '/v1/skills/$skillId/install'
     | '/v1/skills/admin/submissions'
-    | '/v2/hosting/boat/webhook'
     | '/v2/hosting/claims/redeem'
     | '/v2/remote/discord-route/reconcile'
     | '/v2/remote/discord-route/removed'
@@ -1639,11 +1649,13 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/webhook-routes'
     | '/v2/remote/sessions/$sessionId/end'
     | '/v2/remote/sessions/$sessionId/ticket'
+    | '/v2/hosting/organization/servers/'
     | '/v2/hosting/servers/$serverId/'
     | '/v2/remote/hosts/$hostId/'
     | '/v1/marketplace/agents/admin/featured/$agentId'
     | '/v1/marketplace/agents/admin/submissions/$versionId'
     | '/v1/skills/$skillId/versions/$versionId/content'
+    | '/v2/hosting/organization/servers/$serverId/funding'
     | '/v2/remote/hosts/$hostId/members/$membershipId'
     | '/v2/remote/hosts/$hostId/members/'
   fileRoutesByTo: FileRoutesByTo
@@ -1745,7 +1757,6 @@ export interface FileRouteTypes {
     | '/v1/skills/$skillId/icon'
     | '/v1/skills/$skillId/install'
     | '/v1/skills/admin/submissions'
-    | '/v2/hosting/boat/webhook'
     | '/v2/hosting/claims/redeem'
     | '/v2/remote/discord-route/reconcile'
     | '/v2/remote/discord-route/removed'
@@ -1798,11 +1809,13 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/webhook-routes'
     | '/v2/remote/sessions/$sessionId/end'
     | '/v2/remote/sessions/$sessionId/ticket'
+    | '/v2/hosting/organization/servers'
     | '/v2/hosting/servers/$serverId'
     | '/v2/remote/hosts/$hostId'
     | '/v1/marketplace/agents/admin/featured/$agentId'
     | '/v1/marketplace/agents/admin/submissions/$versionId'
     | '/v1/skills/$skillId/versions/$versionId/content'
+    | '/v2/hosting/organization/servers/$serverId/funding'
     | '/v2/remote/hosts/$hostId/members/$membershipId'
     | '/v2/remote/hosts/$hostId/members'
   id:
@@ -1904,7 +1917,6 @@ export interface FileRouteTypes {
     | '/v1/skills/$skillId/icon'
     | '/v1/skills/$skillId/install'
     | '/v1/skills/admin/submissions'
-    | '/v2/hosting/boat/webhook'
     | '/v2/hosting/claims/redeem'
     | '/v2/remote/discord-route/reconcile'
     | '/v2/remote/discord-route/removed'
@@ -1957,11 +1969,13 @@ export interface FileRouteTypes {
     | '/v2/remote/hosts/$hostId/webhook-routes'
     | '/v2/remote/sessions/$sessionId/end'
     | '/v2/remote/sessions/$sessionId/ticket'
+    | '/v2/hosting/organization/servers/'
     | '/v2/hosting/servers/$serverId/'
     | '/v2/remote/hosts/$hostId/'
     | '/v1/marketplace/agents/admin/featured/$agentId'
     | '/v1/marketplace/agents/admin/submissions/$versionId'
     | '/v1/skills/$skillId/versions/$versionId/content'
+    | '/v2/hosting/organization/servers/$serverId/funding'
     | '/v2/remote/hosts/$hostId/members/$membershipId'
     | '/v2/remote/hosts/$hostId/members/'
   fileRoutesById: FileRoutesById
@@ -2052,7 +2066,6 @@ export interface RootRouteChildren {
   V1MarketplaceAgentsMineRoute: typeof V1MarketplaceAgentsMineRoute
   V1MobileAuthEmailVerifyRoute: typeof V1MobileAuthEmailVerifyRoute
   V1SkillsAdminSubmissionsRoute: typeof V1SkillsAdminSubmissionsRouteWithChildren
-  V2HostingBoatWebhookRoute: typeof V2HostingBoatWebhookRoute
   V2HostingClaimsRedeemRoute: typeof V2HostingClaimsRedeemRoute
   V2RemoteDiscordRouteReconcileRoute: typeof V2RemoteDiscordRouteReconcileRoute
   V2RemoteDiscordRouteRemovedRoute: typeof V2RemoteDiscordRouteRemovedRoute
@@ -2099,9 +2112,11 @@ export interface RootRouteChildren {
   V2RemoteHostsHostIdWebhookRoutesRoute: typeof V2RemoteHostsHostIdWebhookRoutesRoute
   V2RemoteSessionsSessionIdEndRoute: typeof V2RemoteSessionsSessionIdEndRoute
   V2RemoteSessionsSessionIdTicketRoute: typeof V2RemoteSessionsSessionIdTicketRoute
+  V2HostingOrganizationServersIndexRoute: typeof V2HostingOrganizationServersIndexRoute
   V2HostingServersServerIdIndexRoute: typeof V2HostingServersServerIdIndexRoute
   V2RemoteHostsHostIdIndexRoute: typeof V2RemoteHostsHostIdIndexRoute
   V1MarketplaceAgentsAdminFeaturedAgentIdRoute: typeof V1MarketplaceAgentsAdminFeaturedAgentIdRoute
+  V2HostingOrganizationServersServerIdFundingRoute: typeof V2HostingOrganizationServersServerIdFundingRoute
   V2RemoteHostsHostIdMembersMembershipIdRoute: typeof V2RemoteHostsHostIdMembersMembershipIdRoute
   V2RemoteHostsHostIdMembersIndexRoute: typeof V2RemoteHostsHostIdMembersIndexRoute
 }
@@ -2808,13 +2823,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof V1SkillsAdminSubmissionsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/v2/hosting/boat/webhook': {
-      id: '/v2/hosting/boat/webhook'
-      path: '/v2/hosting/boat/webhook'
-      fullPath: '/v2/hosting/boat/webhook'
-      preLoaderRoute: typeof V2HostingBoatWebhookRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/v2/hosting/claims/redeem': {
       id: '/v2/hosting/claims/redeem'
       path: '/v2/hosting/claims/redeem'
@@ -2989,6 +2997,13 @@ declare module '@tanstack/solid-router' {
       fullPath: '/v1/skills/admin/submissions/$versionId'
       preLoaderRoute: typeof V1SkillsAdminSubmissionsVersionIdRouteImport
       parentRoute: typeof V1SkillsAdminSubmissionsRoute
+    }
+    '/v2/hosting/organization/servers/': {
+      id: '/v2/hosting/organization/servers/'
+      path: '/v2/hosting/organization/servers'
+      fullPath: '/v2/hosting/organization/servers/'
+      preLoaderRoute: typeof V2HostingOrganizationServersIndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/v2/hosting/servers/$serverId/': {
       id: '/v2/hosting/servers/$serverId/'
@@ -3192,6 +3207,13 @@ declare module '@tanstack/solid-router' {
       fullPath: '/v1/skills/$skillId/versions/$versionId/content'
       preLoaderRoute: typeof V1SkillsSkillIdVersionsVersionIdContentRouteImport
       parentRoute: typeof V1SkillsSkillIdVersionsVersionIdRoute
+    }
+    '/v2/hosting/organization/servers/$serverId/funding': {
+      id: '/v2/hosting/organization/servers/$serverId/funding'
+      path: '/v2/hosting/organization/servers/$serverId/funding'
+      fullPath: '/v2/hosting/organization/servers/$serverId/funding'
+      preLoaderRoute: typeof V2HostingOrganizationServersServerIdFundingRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/v2/remote/hosts/$hostId/members/': {
       id: '/v2/remote/hosts/$hostId/members/'
@@ -3431,7 +3453,6 @@ const rootRouteChildren: RootRouteChildren = {
   V1MarketplaceAgentsMineRoute: V1MarketplaceAgentsMineRoute,
   V1MobileAuthEmailVerifyRoute: V1MobileAuthEmailVerifyRoute,
   V1SkillsAdminSubmissionsRoute: V1SkillsAdminSubmissionsRouteWithChildren,
-  V2HostingBoatWebhookRoute: V2HostingBoatWebhookRoute,
   V2HostingClaimsRedeemRoute: V2HostingClaimsRedeemRoute,
   V2RemoteDiscordRouteReconcileRoute: V2RemoteDiscordRouteReconcileRoute,
   V2RemoteDiscordRouteRemovedRoute: V2RemoteDiscordRouteRemovedRoute,
@@ -3484,10 +3505,14 @@ const rootRouteChildren: RootRouteChildren = {
   V2RemoteHostsHostIdWebhookRoutesRoute: V2RemoteHostsHostIdWebhookRoutesRoute,
   V2RemoteSessionsSessionIdEndRoute: V2RemoteSessionsSessionIdEndRoute,
   V2RemoteSessionsSessionIdTicketRoute: V2RemoteSessionsSessionIdTicketRoute,
+  V2HostingOrganizationServersIndexRoute:
+    V2HostingOrganizationServersIndexRoute,
   V2HostingServersServerIdIndexRoute: V2HostingServersServerIdIndexRoute,
   V2RemoteHostsHostIdIndexRoute: V2RemoteHostsHostIdIndexRoute,
   V1MarketplaceAgentsAdminFeaturedAgentIdRoute:
     V1MarketplaceAgentsAdminFeaturedAgentIdRoute,
+  V2HostingOrganizationServersServerIdFundingRoute:
+    V2HostingOrganizationServersServerIdFundingRoute,
   V2RemoteHostsHostIdMembersMembershipIdRoute:
     V2RemoteHostsHostIdMembersMembershipIdRoute,
   V2RemoteHostsHostIdMembersIndexRoute: V2RemoteHostsHostIdMembersIndexRoute,
@@ -3495,12 +3520,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/solid-start'
-declare module '@tanstack/solid-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

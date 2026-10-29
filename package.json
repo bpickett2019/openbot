@@ -11,12 +11,12 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nightly-labs/openbot.git"
+    "url": "git+https://github.com/bpickett2019/openbot.git"
   },
   "bugs": {
-    "url": "https://github.com/nightly-labs/openbot/issues"
+    "url": "https://github.com/bpickett2019/openbot/issues"
   },
-  "homepage": "https://github.com/nightly-labs/openbot#readme",
+  "homepage": "https://github.com/bpickett2019/openbot#readme",
   "keywords": [
     "ai-agents",
     "bun",
@@ -85,7 +85,6 @@
     "api:build": "bun run --cwd apps/auth-api build",
     "api:images": "bun run --cwd apps/auth-api images",
     "api:deploy": "bun run --cwd apps/auth-api deploy",
-    "hosting:template": "bun scripts/hosting/build-boat-template.ts",
     "hosting:setup": "bun scripts/hosting/setup-account-server.ts",
     "api:deploy:test": "bun run --cwd apps/auth-api deploy:test",
     "status:build": "bun run --cwd apps/status build",
@@ -96,13 +95,9 @@
     "api:migrate:local": "bun run --cwd apps/auth-api db:migrate:local",
     "api:migrate:remote": "bun run --cwd apps/auth-api db:migrate:remote",
     "api:stripe:bootstrap": "bun run --cwd apps/auth-api stripe:bootstrap",
-    "remote:up": "remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- docker compose -f remote/compose.yaml up -d --build",
-    "remote:down": "remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- docker compose -f remote/compose.yaml down",
-    "remote:logs": "remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- docker compose -f remote/compose.yaml logs -f remote-api coturn",
     "remote:check": "bun remote/scripts/check.ts",
     "remote:check:compose": "bun remote/scripts/check.ts --compose",
-    "remote:env:validate": "cd remote && bin/dotenvx validate -f .env.production -fk .env.keys",
-    "remote:update": "remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- bun remote/scripts/update.ts",
+    "remote:update": "bun remote/scripts/update.ts",
     "env:encrypt:prod": "bun run --cwd apps/auth-api env:encrypt:prod",
     "env:set:smtp": "bun run --cwd apps/auth-api env:set:smtp",
     "env:validate:prod": "bun run --cwd apps/auth-api env:validate:prod",
@@ -304,9 +299,7 @@
     "test:exit-records": "bun scripts/exit-records-e2e.ts",
     "test:exit-watchdog": "bun scripts/exit-watchdog-e2e.ts",
     "test:zero-filled-settings": "bun scripts/zero-filled-settings-e2e.ts",
-    "test:hosted-start-wait": "bun apps/auth-api/scripts/hosted-start-wait-e2e.ts",
-    "test:hosted-held-resume": "bun apps/auth-api/scripts/hosted-held-resume-e2e.ts",
-    "test:hosted-retention-wake": "bun apps/auth-api/scripts/hosted-retention-wake-e2e.ts",
+    "test:hosted-lifecycle": "bun apps/auth-api/scripts/hosted-lifecycle-e2e.ts",
     "test:remote-auth-events": "bun apps/auth-api/scripts/remote-auth-events-e2e.ts",
     "test:invite-acceptance": "bun apps/auth-api/scripts/invite-acceptance-e2e.ts",
     "test:host-key-handover": "bun apps/auth-api/scripts/host-key-handover-e2e.ts",
@@ -334,9 +327,9 @@
     "check": "bun run --parallel check:desktop check:api && bun run test:desktop",
     "check:desktop": "bun run check:desktop:static && bun run test:browser",
     "check:desktop:static": "bun run check:ui && bun run lint && bun run desktop:typecheck && bun run build && bun run verify:preload",
-    "check:api": "bun run typecheck:api && bun run test:api && bun run test:billing-snapshot && bun run test:remote-auth-events && bun run test:invite-acceptance && bun run test:host-key-handover && bun run test:cloud-authorization && bun run test:hosted-held-resume && bun run test:hosted-retention-wake && bun run test:mobile-connected-devices && bun run api:build:check",
+    "check:api": "bun run typecheck:api && bun run test:api && bun run test:billing-snapshot && bun run test:remote-auth-events && bun run test:invite-acceptance && bun run test:host-key-handover && bun run test:cloud-authorization && bun run test:hosted-lifecycle && bun run test:mobile-connected-devices && bun run api:build:check",
     "desktop:typecheck": "bun run --parallel typecheck:node typecheck:renderer typecheck:contracts typecheck:brand typecheck:storybook",
-    "api:build:check": "CLOUDFLARE_ENV=preview bun run api:build",
+    "api:build:check": "CLOUDFLARE_ENV=test OPENBOT_SELF_HOSTED_DEPLOY=1 bun run api:build",
     "check:ui": "bun scripts/ui-foundation-check.ts",
     "check:assets": "bun scripts/check-image-assets.ts",
     "check:doc-links": "bun scripts/check-doc-links.ts",

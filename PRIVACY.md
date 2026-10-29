@@ -359,39 +359,38 @@ the avatar without an account session.
 
 ## Hosted servers
 
-Each account can buy hosted servers. A hosted server is a Linux
-OpenBot computer that runs in a [boat](https://boat.dev) sandbox in the EU (Germany, Finland or
-France). The sandbox holds the server's workspaces, conversations, attachments, browser data and
-team data, the same as your own computer would. The server stops 15 to 30 minutes after its last use and
-starts again when you press a key or click in an app that shows it, when a Slack, Discord or
-Telegram message addresses OpenBot, or a few minutes before its next scheduled routine run. Use means that an agent works, a remote desktop is open, a file moves, or you
-sent a message, made a change, typed or used a shared browser view in the last 5 minutes. An app
-that has focus (a focused window or tab, or the phone app in the foreground) also counts, for at
-most 30 minutes after your last message, change or typing, or after you return to the app. The app
-tells only the server that it
-has focus; the account service gets no new data. An app that is only open without focus does not count.
-To show whether a server is asleep, the app asks the account service for its state. This request
-stores nothing. When boat stops the sandbox, boat keeps a snapshot of its disk until
-the server starts again. Deleting the server
-deletes the sandbox. A hosted server updates itself: it downloads the newest release from GitHub
-Releases, as an installed build does, installs the Ubuntu packages that the release needs from the
-Ubuntu package servers, and starts it at its next start, or when a member with update access installs
-it from Server Settings.
+The fork's managed host is an organization-funded Linux OpenBot desktop on a DigitalOcean Droplet
+with a separately retained native ext4 Volume. The configured region is shown with its resources;
+there is no implicit EU-only placement. The volume contains workspaces, conversations, attachments,
+browser profiles, provider sessions, team identity and keyring material, as a local computer would.
+The browser/account service, Signal and TURN remain on Cloudflare.
 
-For each hosted server, the account service stores the owner, name, size and the size of a pending
-plan change, the plan, billing interval and currency, the open Stripe Checkout session ID, desired
-and reported state, a reason code when the server fails to start, the reason for its last start, the
-boat sandbox ID, a hash of the setup claim with its expiry and first-use times, the ID of the account
-session that the server signed in with, the time of its last use, the end of its boat stop timer, the time of
-its next scheduled routine run (not the routine or its instructions), and creation, update and deletion times. After a
-server is deleted, its record stays so that the service never loses track of a sandbox. It also
-stores the ID and receive time of each boat webhook delivery for 7 days. The account service does
-not receive the server's conversations, files or commands, and its boat key cannot read them.
+An authorized operator creates the single allocation and controls active/revoked funding. Staff join
+through normal membership and invitations, without Stripe checkout. Activity and scheduled routines
+can wake a funded host. Revocation denies access and stops it but retains the volume and identity.
+Power-off and detached storage still incur provider charges. Explicit owner deletion removes the
+Droplet and data volume; the allocation stays reserved until provider and Remote cleanup are confirmed.
 
-The account service gives each sandbox a name in boat, so that an operator can find a server in the
-boat dashboard: `openbot-`, the plan, your account email with each other character as `-`, and the
-first 8 characters of the server ID, such as `openbot-starter-ada-example-com-1a2b3c4d`. boat keeps
-the name with the sandbox.
+The account service stores the owner, host name, funding status, entitlement plan, resource/region
+configuration, separate Droplet and Volume identifiers, desired/observed states, operation and
+idempotency records, reason codes, activity/routine timestamps and cleanup state. It stores a hash
+and bounded expiry/use times for the bootstrap claim and the associated account-session identity.
+The initial claim lasts at most one hour; after first use, a ten-minute window permits recovery of
+the same credential after a lost response. Revoked/deleted sessions cannot be restored by replay.
+Historical Stripe/Boat records are preserved, not used to provision new resources.
+
+DigitalOcean receives the VM/volume configuration, host-derived resource names/tags and cloud-init
+containing a short-lived host claim and public service/image settings. It does not receive the
+organization operator bearer or cloud API token in the desktop environment. The app's network
+cannot reach instance metadata or host services. These controls do not make a cloud provider or
+privileged infrastructure administrator unable to access its underlying VM/storage.
+
+The account service does not copy desktop conversations, files or commands into D1/R2. Managed
+images are pinned to this fork's digest and version. Replacement retains the same native state;
+there is no active object-store file-copy layer. Volume snapshots are separate backups and may
+retain data independently of a deleted VM/volume according to the operator's retention policy.
+Native durability, coherent restore and real transport acceptance must be verified before
+commissioning; the implementation's local checks do not establish those outcomes.
 
 ## Central data retention
 
@@ -505,6 +504,13 @@ agent's Slack app, it exchanges the Slack sign-in and serves the install page; s
 computer answers each chat; see [Telegram connections](#telegram-connections). Cloudflare and the
 email provider can keep their own security, delivery, and network logs under their own policies. These provider logs are outside the
 OpenBot application database and its daily maintenance task.
+
+In the optional self-hosted Vercel website, Vercel serves the browser files and proxies account API
+requests to the configured account service. It therefore processes the forwarded sign-in details,
+session cookies or bearer tokens, invitation data, and account and host metadata. The proxy sets
+`no-store` on API responses. Vercel can keep infrastructure and security logs under its own policies.
+Conversation, attachment, command and Computer Use traffic still uses the encrypted connection to
+the agent host, not this account API proxy.
 
 The public status page at `status.openbot.run` is on GitHub Pages. GitHub serves it and keeps its
 own request logs under its own policy. The page has no analytics and no cookies, and it loads
@@ -682,9 +688,14 @@ short-lived authentication, SDP, and ICE messages. Team API data uses WebRTC Dat
 Desktop media and input use a separate WebRTC connection. A paste in the Remote Desktop viewer
 sends the member's clipboard text to the host, which puts it on the host's clipboard. The live browser view sends compressed
 images of the host's browser tab, and the watching member's pointer and key input, over that same
-media connection. ICE uses a direct peer-to-peer path when possible. If a direct path is not possible, encrypted WebRTC traffic uses an OpenBot coturn relay.
+media connection. ICE uses a direct peer-to-peer path when possible. Otherwise encrypted WebRTC
+traffic passes through Cloudflare Realtime TURN. Signal requests short-lived credentials whose TTL
+is bounded by the authenticated session; the issuer's API token stays server-side. Signal tracks
+issued credentials only in process memory and requests revocation of known credentials when access
+ends. Unknown credentials after a lost process/uncertain issuance expire by TTL; immediate
+termination of every existing relay allocation is not guaranteed by this implementation.
 When the owner selects **Private network** in Settings › Mobile Connect, the host gets no STUN or
-TURN server, so no WebRTC traffic goes through an OpenBot relay. Team API connections then use only
+TURN server, so no WebRTC traffic goes through a TURN relay. Team API connections then use only
 addresses on a private network, such as the Wi-Fi or a Tailscale tailnet. The desktop media
 connection gets the same empty server list for each new stream, so it also uses only a direct path,
 which can be a public IPv6 address of the computer. Sign-in and Signal messages do not change.

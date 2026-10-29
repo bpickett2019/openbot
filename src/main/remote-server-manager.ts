@@ -1083,6 +1083,14 @@ export class RemoteServerManager extends EventEmitter<RemoteServerEvents> {
    */
   hostedServerStarting(serverId: string, server?: Parameters<typeof hostedStartStep>[0]): void {
     if (this.#stopping || !this.#store.has(serverId) || this.#connections.stateFor(serverId) === "online") return;
+    if (server?.fundingStatus === "revoked") {
+      this.#clearHostedStart(serverId);
+      this.#events.setHostStarting(serverId, false);
+      this.#connections.setHostedSleep(serverId, null);
+      this.#connections.setHostedIssue(serverId, "wake_failed");
+      this.#emitChanged();
+      return;
+    }
     this.#hostedStartRevision.set(serverId, (this.#hostedStartRevision.get(serverId) ?? 0) + 1);
     if (this.#connections.statusFor(serverId).hostedIssue === "plan_ended") this.#events.resumeReconnect(serverId);
     // Automatic wakes stop after an expired start, so this wake came from the user.

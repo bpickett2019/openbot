@@ -3,11 +3,11 @@
 // WebSocket connections: the Telegram secret header, the Slack signature, the signed account
 // events, the body limits, the remote and route tickets, a failed account service during an initial ticket check after a start, the generic webhook headers, the hello deadline, the reuse of
 // TURN credentials, and that no frame or log line holds the Telegram bot token. Writes .openbot-build/signal-security-e2e/report.json and exits
-// non-zero when a check fails. It makes no request to Telegram, Slack or Discord.
+// non-zero when a check fails. It makes no request to Telegram, Slack, Discord or Cloudflare.
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHmac, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { resolve } from "node:path";
 import {
@@ -46,6 +46,13 @@ const TELEGRAM_WEBHOOK_SECRET = randomBytes(32).toString("base64url");
 const AUTH_WEBHOOK_SECRET = randomBytes(32).toString("base64url");
 const SLACK_APP_ID = "A0E2ETEST";
 const SLACK_SECRET = randomBytes(32).toString("hex");
+const TURN_KEY_ID = "signal-e2e";
+const TURN_API_TOKEN = randomBytes(32).toString("base64url");
+const turnMints: Array<{ ttl: number; username: string }> = [];
+const turnRevocations: string[] = [];
+let turnFailure = false;
+let revokeFailure = false;
+let nextMintGate: { entered: () => void; release: Promise<void> } | null = null;
 const HOST_ID = "host-e2e";
 const ROUTED_CHAT = "-100";
 const SECOND_CHAT = "-300";
@@ -102,13 +109,22 @@ function hmac(secret: string, text: string, encoding: "hex" | "base64url") {
 // The account service that Signal asks. It confirms every route that a ticket names, and records
 // whether each request carried a valid service signature.
 const controlPlaneCalls: Array<{ path: string; signed: boolean }> = [];
-function readBody(request: IncomingMessage): Promise<string> {
-  return new Promise((resolveBody, reject) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => resolveBody(Buffer.concat(chunks).toString()));
-    request.on("error", reject);
+function readBody(request: IncomingMessage, limit = 64 * 1024): Promise<string> {
+  const { promise, resolve: resolveBody, reject } = Promise.withResolvers<string>();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  request.on("data", (chunk: Buffer) => {
+    bytes += chunk.length;
+    if (bytes > limit) {
+      request.destroy();
+      reject(new Error("Local fixture request is too large."));
+      return;
+    }
+    chunks.push(chunk);
   });
+  request.on("end", () => resolveBody(Buffer.concat(chunks).toString()));
+  request.on("error", reject);
+  return promise;
 }
 function startControlPlane(port: number): Promise<Server> {
   const server = createServer(async (request, response) => {
@@ -143,6 +159,64 @@ function startControlPlane(port: number): Promise<Server> {
   return new Promise((resolveServer) => server.listen(port, "127.0.0.1", () => resolveServer(server)));
 }
 
+function startTurnIssuer(port: number): Promise<Server> {
+  const server = createServer(async (request, response) => {
+    if (request.method !== "POST" || request.headers.authorization !== `Bearer ${TURN_API_TOKEN}`) {
+      response.writeHead(401).end();
+      return;
+    }
+    const prefix = `/v1/turn/keys/${TURN_KEY_ID}/credentials/`;
+    if (request.url === `${prefix}generate-ice-servers`) {
+      const input = await readBody(request, 1_024).catch(() => null);
+      if (input === null) return;
+      const { ttl } = JSON.parse(input);
+      if (!Number.isInteger(ttl) || ttl < 1 || ttl > 3_600) {
+        response.writeHead(400).end();
+        return;
+      }
+      const username = `synthetic-${randomUUID()}`;
+      turnMints.push({ ttl, username });
+      const gate = nextMintGate;
+      nextMintGate = null;
+      if (gate) {
+        gate.entered();
+        await gate.release;
+      }
+      if (turnFailure) {
+        response.writeHead(503).end(TURN_API_TOKEN);
+        return;
+      }
+      response.writeHead(201, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          iceServers: [
+            { urls: ["stun:127.0.0.1:3478"] },
+            {
+              urls: ["turn:127.0.0.1:3478?transport=udp"],
+              username,
+              credential: randomBytes(24).toString("base64url"),
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    if (request.url?.startsWith(prefix) && request.url.endsWith("/revoke")) {
+      if (revokeFailure) {
+        response.writeHead(503).end(TURN_API_TOKEN);
+        return;
+      }
+      turnRevocations.push(decodeURIComponent(request.url.slice(prefix.length, -"/revoke".length)));
+      response.writeHead(204).end();
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const { promise, resolve: resolveServer } = Promise.withResolvers<Server>();
+  server.listen(port, "127.0.0.1", () => resolveServer(server));
+  return promise;
+}
+
 // Tickets that the account service would sign for a host.
 const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 const { privateKey: foreignKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
@@ -160,7 +234,10 @@ async function sign(claims: JWTPayload, audience: string, key = privateKey) {
 
 function remoteTicket(
   overrides: Partial<
-    Pick<RemoteTicketClaims, "hostId" | "membershipId" | "sessionExpiresAt" | "protocolMinimum" | "protocolMaximum">
+    Pick<
+      RemoteTicketClaims,
+      "hostId" | "membershipId" | "sessionId" | "role" | "sessionExpiresAt" | "protocolMinimum" | "protocolMaximum"
+    >
   > = {},
   key = privateKey,
 ) {
@@ -253,8 +330,14 @@ async function waitForReady(url: string, child: ChildProcess) {
   throw new Error("Signal did not become ready.");
 }
 
-const [signalPort, healthPort, controlPlanePort] = await Promise.all([freePort(), freePort(), freePort()]);
+const [signalPort, healthPort, controlPlanePort, turnPort] = await Promise.all([
+  freePort(),
+  freePort(),
+  freePort(),
+  freePort(),
+]);
 const controlPlane = await startControlPlane(controlPlanePort);
+const turnIssuer = await startTurnIssuer(turnPort);
 const serviceOutput: string[] = [];
 const child = spawn("bun", [resolve(ROOT, "remote/api/src/index.ts")], {
   cwd: resolve(ROOT, "remote/api"),
@@ -270,8 +353,10 @@ const child = spawn("bun", [resolve(ROOT, "remote/api/src/index.ts")], {
     REMOTE_CONTROL_PLANE_URL: `http://127.0.0.1:${controlPlanePort}`,
     REMOTE_SESSION_SECRET: randomBytes(32).toString("base64url"),
     REMOTE_AUTH_WEBHOOK_SECRET: AUTH_WEBHOOK_SECRET,
-    TURN_SHARED_SECRET: randomBytes(32).toString("base64url"),
-    TURN_HOST: "127.0.0.1",
+    CLOUDFLARE_TURN_KEY_ID: TURN_KEY_ID,
+    CLOUDFLARE_TURN_API_TOKEN: TURN_API_TOKEN,
+    REMOTE_TURN_API_ORIGIN: `http://127.0.0.1:${turnPort}`,
+    REMOTE_ALLOWED_ORIGINS: "https://account.example.test",
     SLACK_SIGNING_SECRET: `${SLACK_APP_ID}:${SLACK_SECRET}`,
     TELEGRAM_BOT_TOKENS: BOT_TOKEN,
     TELEGRAM_WEBHOOK_SECRET,
@@ -322,9 +407,42 @@ async function helloFails(name: string, ticket: string) {
   });
 }
 
+function websocketUpgrade(origin: string): Promise<number> {
+  const { promise, resolve: complete, reject } = Promise.withResolvers<number>();
+  const request = httpRequest(`${base}/v1/signal`, {
+    headers: {
+      Connection: "Upgrade",
+      Upgrade: "websocket",
+      "Sec-WebSocket-Version": "13",
+      "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+      Origin: origin,
+    },
+  });
+  request.once("upgrade", (response, socket) => {
+    socket.destroy();
+    complete(response.statusCode ?? 0);
+  });
+  request.once("response", (response) => {
+    response.resume();
+    complete(response.statusCode ?? 0);
+  });
+  request.once("error", reject);
+  request.setTimeout(WAIT_MS, () => request.destroy(new Error("WebSocket upgrade timed out.")));
+  request.end();
+  return promise;
+}
+
 try {
   await waitForReady(`${base}/health/ready`, child);
   logger.info(`Signal is ready on port ${signalPort}.`);
+
+  await check("Only the configured browser and released desktop origins can upgrade", async () => {
+    expect((await websocketUpgrade("https://foreign.example.test")) === 403, "Foreign origin was not refused.");
+    expect((await websocketUpgrade("null")) === 403, "Opaque origin was not refused.");
+    expect((await websocketUpgrade("https://account.example.test")) === 101, "Account origin was refused.");
+    expect((await websocketUpgrade("openbot-app://app")) === 101, "Released desktop origin was refused.");
+    return "foreign and opaque origins denied; account and desktop origins accepted";
+  });
 
   // 1. Telegram: only a request with the bot's own secret header reaches a host.
   const ingress = await connect(signalUrl);
@@ -687,6 +805,173 @@ try {
     return "both answers have the same TURN username";
   });
 
+  await check("TURN TTL is capped by session expiry and reconnect shares the session credential", async () => {
+    const before = turnMints.length;
+    const sessionExpiresAt = Math.floor(Date.now() / 1_000) + 45;
+    const peer = await connect(signalUrl);
+    peer.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "host",
+        token: await remoteTicket({ hostId: "host-ttl", sessionExpiresAt }),
+      }),
+    );
+    const first = JSON.parse(await peer.next((frame) => frame.includes('"type":"ready"'), "TTL ready"));
+    expect(turnMints.length === before + 1, "Expected exactly one credential request.");
+    const minted = turnMints[before];
+    expect(minted !== undefined && minted.ttl > 0 && minted.ttl <= 35, "TTL exceeded the session deadline reserve.");
+    peer.socket.close();
+    await withDeadline(peer.closed, "TTL peer closed");
+    const resumed = await connect(signalUrl);
+    resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token: first.resumeToken }));
+    const second = JSON.parse(await resumed.next((frame) => frame.includes('"type":"ready"'), "resumed TTL ready"));
+    expect(JSON.stringify(first.iceServers) === JSON.stringify(second.iceServers), "Reconnect minted new credentials.");
+    expect(turnMints.length === before + 1, "Reconnect amplified credential issuance.");
+    resumed.socket.close();
+    return "short TTL respects session expiry; reconnect reuses the same credentials";
+  });
+
+  await check("An expired session never calls the TURN provider", async () => {
+    const before = turnMints.length;
+    const peer = await connect(signalUrl);
+    peer.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "host",
+        token: await remoteTicket({
+          hostId: "host-expired-turn",
+          sessionExpiresAt: Math.floor(Date.now() / 1_000) - 1,
+        }),
+      }),
+    );
+    expect((await withDeadline(peer.closed, "expired peer close")) === 1008, "Expired session was not denied.");
+    expect(turnMints.length === before, "Expired session called the issuer.");
+    return "authentication denied with no credential request";
+  });
+
+  await check("A TURN provider failure cannot admit a peer or expose its response", async () => {
+    turnFailure = true;
+    try {
+      const token = await remoteTicket({ hostId: "host-turn-failure" });
+      const peer = await connect(signalUrl);
+      peer.socket.send(
+        JSON.stringify({
+          type: "hello",
+          version: 1,
+          peer: "host",
+          token,
+        }),
+      );
+      expect(
+        (await withDeadline(peer.closed, "failed issuer peer close")) === 1013,
+        "Provider failure did not close with 1013.",
+      );
+      expect(!peer.frames.some((frame) => frame.includes('"type":"ready"')), "Failed provider admitted a peer.");
+      const minted = turnMints.length;
+      const retry = await connect(signalUrl);
+      retry.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
+      expect((await withDeadline(retry.closed, "issuer retry close")) === 1013, "Failed issuer retry was admitted.");
+      expect(turnMints.length === minted, "Reconnect amplified a failed mint.");
+      return "no ready frame, no fallback, bounded failed issuance";
+    } finally {
+      turnFailure = false;
+    }
+  });
+
+  await check("Revocation during a shared mint denies both sockets and revokes the late credential", async () => {
+    const hostId = "host-revoke-mint";
+    const anchor = await connect(signalUrl);
+    anchor.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "host",
+        token: await remoteTicket({ hostId }),
+      }),
+    );
+    await anchor.next((frame) => frame.includes('"type":"ready"'), "revocation anchor ready");
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    nextMintGate = { entered: entered.resolve, release: released.promise };
+    const token = await remoteTicket({ hostId });
+    const first = await connect(signalUrl);
+    const second = await connect(signalUrl);
+    first.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
+    await withDeadline(entered.promise, "provider mint entered");
+    const before = turnMints.length;
+    second.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
+    const body = JSON.stringify({ type: "remote-auth-changed", hostId, authEpoch: 2 });
+    const timestamp = nowSeconds();
+    const event = postAuthEvent(body, timestamp, hmac(AUTH_WEBHOOK_SECRET, `${timestamp}.${body}`, "base64url"));
+    try {
+      // Closure of an admitted peer is the barrier: revocation was recorded before issuer release.
+      expect((await withDeadline(anchor.closed, "revocation barrier")) === 1008, "The anchor was not revoked.");
+    } finally {
+      released.resolve();
+    }
+    expect((await event).status === 204, "The late credential was not revoked.");
+    await withDeadline(first.closed, "first revoked mint close");
+    await withDeadline(second.closed, "second revoked mint close");
+    expect(turnMints.length === before, "Concurrent hello amplified the mint.");
+    const pendingMint = turnMints[before - 1];
+    expect(
+      pendingMint !== undefined && turnRevocations.includes(pendingMint.username),
+      "The late credential was not sent for revocation.",
+    );
+    expect(
+      ![...first.frames, ...second.frames].some((frame) => frame.includes('"type":"ready"')),
+      "Revoked mint admitted a peer.",
+    );
+    return "one provider mint; no ready frames; late credential revoked";
+  });
+
+  await check("Session revocation closes access before provider failure and the outbox can retry", async () => {
+    const hostId = "host-turn-revocation";
+    const sessionId = "client-turn-revocation";
+    const host = await connect(signalUrl);
+    host.socket.send(
+      JSON.stringify({ type: "hello", version: 1, peer: "host", token: await remoteTicket({ hostId }) }),
+    );
+    await host.next((frame) => frame.includes('"type":"ready"'), "revocation host ready");
+    const client = await connect(signalUrl);
+    client.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "client",
+        token: await remoteTicket({ hostId, sessionId, role: "member", membershipId: "member-turn-revocation" }),
+      }),
+    );
+    const frame = JSON.parse(await client.next((item) => item.includes('"type":"ready"'), "revocation client ready"));
+    const username = frame.iceServers.find((server: { username?: string }) => server.username)?.username;
+    const body = JSON.stringify({ type: "remote-session-ended", hostId, sessionId });
+    const timestamp = nowSeconds();
+    const signature = hmac(AUTH_WEBHOOK_SECRET, `${timestamp}.${body}`, "base64url");
+    revokeFailure = true;
+    try {
+      const event = postAuthEvent(body, timestamp, signature);
+      expect(
+        (await withDeadline(client.closed, "revoked session close")) === 1008,
+        "Access did not close before provider I/O.",
+      );
+      expect((await event).status === 503, "Incomplete provider revocation was acknowledged.");
+    } finally {
+      revokeFailure = false;
+    }
+    expect((await postAuthEvent(body, timestamp, signature)).status === 204, "Repeated revocation did not finish.");
+    expect(turnRevocations.includes(username), "The session credential was not revoked.");
+    host.socket.close();
+    return "access closed first; 503 on provider failure; repeated event finishes revocation";
+  });
+
+  await check("No frame or log exposes the TURN issuer token", async () => {
+    expect(!allFrames.some((frame) => frame.includes(TURN_API_TOKEN)), "A frame holds the issuer token.");
+    expect(!serviceOutput.some((line) => line.includes(TURN_API_TOKEN)), "A log holds the issuer token.");
+    return "provider error bodies and issuer credentials remain private";
+  });
+
   await check("Signal signs each request to the account service", async () => {
     expect(controlPlaneCalls.length > 0, "Signal made no account service request.");
     const unsigned = controlPlaneCalls.filter((call) => !call.signed);
@@ -708,6 +993,7 @@ try {
 } finally {
   child.kill("SIGTERM");
   controlPlane.close();
+  turnIssuer.close();
 }
 
 mkdirSync(OUT, { recursive: true });

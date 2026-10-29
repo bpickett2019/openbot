@@ -31,14 +31,14 @@ therefore checks with TypeScript 6 without a warning.
 The `tsrs` version is exact and must be older than `minimumReleaseAge` in `bunfig.toml` (3 days).
 
 Signal had a similar gap: `remote:check` was its only entry point and also required Compose
-validation. `typecheck:remote` now runs in CI. `remote:check:compose` validates both
-Compose files with the Docker CLI; it does not need a daemon. `remote:check` remains the combined
-local command.
+validation. `typecheck:remote` runs in CI. `remote:check:compose` validates the development
+Compose file with the Docker CLI without starting a daemon. `remote:check` remains the combined
+local command; production Signal is a separately approved Cloudflare deployment.
 
 `remote/api/tsconfig.json` also covers `remote/scripts/*.ts`. These scripts use Bun, while root
 `scripts/**` and Electron main use Node types. Keep Bun types within the remote project rather than
-adding Bun globals at the root. `remote/scripts/update.ts` drains and recreates the live coturn
-container, so its type coverage matters.
+adding Bun globals at the root. `remote/scripts/update.ts --deploy` changes Cloudflare Signal;
+never run it as a check. Enabling runtime needs a separate allowance.
 
 `tsconfig.node.json` and `tsconfig.web.json` set `verbatimModuleSyntax`: a file compiles alone the
 same way under `tsc` and the bundler, because a type-only import must say `import type`. It had no
@@ -136,18 +136,11 @@ The `Provider CLI canary` workflow is not a pull request check. It runs every si
 upstream provider CLIs, which reach users without an OpenBot release; see
 [Provider CLI updates](architecture/providers.md#provider-cli-updates).
 
-`check:api` ends with `api:build:check`, which is the preview build of the Worker, so the API job
-uploads that build as the `cloudflare-preview` artifact. The job has no secrets. After the CI run completes, the trusted
-[cloudflare-preview.yml](../.github/workflows/cloudflare-preview.yml) workflow runs its `main`
-version with the preview deploy token. It skips a closed pull request, a newer commit, and a fork. It
-builds the `main` Worker config, and `scripts/check-preview-worker-config.ts` stops the upload when
-the pull request's generated `wrangler.json` differs from it in anything but the code entry and the
-compatibility settings. Thus a pull request that changes the preview Worker name, bindings, vars, or
-routes gets no preview. A change to `cloudflare-preview.yml` takes effect only after it merges.
-
-All of these jobs gate Cloudflare production deployment on `main`. Surfaces was previously missing from
-that dependency list, which allowed deployment despite a failed mobile or remote check.
-These long suites belong in CI; local desktop runs can reach their time limits under load.
+`check:api` ends with the local preview build check. CI does not upload a fork build to upstream
+Cloudflare resources: the former preview-publication workflow and artifact handoff are removed.
+Owned deployment is explicit through `scripts/deploy-auth-api.ts`, with resource/secret preflight.
+Build checks are not deployment, native persistence or real relay acceptance. Long suites belong
+in CI; local work should use focused sequential checks rather than the entire aggregate.
 
 The `Detect changed areas` job lets a pull request skip the lanes it cannot affect. It compares the
 merge commit with its first parent and first removes Markdown that no build or test reads: `docs/`,

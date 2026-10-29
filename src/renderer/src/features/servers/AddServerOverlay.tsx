@@ -131,7 +131,7 @@ function AddServerSession(
     try {
       const [catalog, list] = await Promise.all([props.calls.plans(), props.calls.list()]);
       const resumed = resume
-        ? list.servers.find((server) => server.serverId === resume.serverId)
+        ? list.servers.find((server) => server.serverId === resume.serverId && server.funding === "stripe")
         : newestInSetup(
             list.servers,
             untrack(() => props.servers),
@@ -272,7 +272,7 @@ function AddServerSession(
 
   async function openPayment(): Promise<void> {
     const serverId = state.server?.serverId;
-    if (!serverId) return;
+    if (!serverId || state.server?.funding !== "stripe") return;
     const server = await props.calls.openCheckout(serverId).catch((error: unknown) => {
       trackPlans("payment_open_failed", { failure_code: "payment_open_failed" });
       throw error;
@@ -284,7 +284,7 @@ function AddServerSession(
 
   async function retry(): Promise<void> {
     const serverId = state.server?.serverId;
-    if (!serverId) return;
+    if (!serverId || state.server?.funding !== "stripe") return;
     trackPlans("retried");
     try {
       const server = await props.calls.wake(serverId);
@@ -365,6 +365,7 @@ function newestInSetup(
 ): HostedServerSummary | undefined {
   let newest: HostedServerSummary | undefined;
   for (const server of servers) {
+    if (server.funding !== "stripe") continue;
     if (server.state !== "creating" && server.state !== "starting" && server.state !== "waking") continue;
     if (rail.some((entry) => entry.id === server.serverId)) continue;
     if (!newest || server.createdAt > newest.createdAt) newest = server;

@@ -30,6 +30,8 @@ const PREFIX = "/api/browser/";
 const COOKIE_ATTRIBUTES = "Path=/; Secure; HttpOnly; SameSite=Lax";
 
 export interface BrowserApiServices {
+  /** The public browser origin behind a reverse proxy. Unset keeps the request origin. */
+  browserAppOrigin?: string | undefined;
   auth: Pick<
     AuthService,
     | "startEmailSignIn"
@@ -146,12 +148,18 @@ function browserWriteContentTypeAllowed(request: Request, path: string): boolean
  * they call the same control-plane methods, so the host role checks there are the only gate.
  */
 export function handleBrowserApi(request: Request, services: BrowserApiServices): Promise<Response> {
-  const path = new URL(request.url).pathname.slice(PREFIX.length).replace(/\/$/u, "");
+  const requestUrl = new URL(request.url);
+  const path = requestUrl.pathname.slice(PREFIX.length).replace(/\/$/u, "");
+  const browserOrigin = services.browserAppOrigin;
+  if (browserOrigin !== undefined && !validBrowserAppOrigin(browserOrigin))
+    return Promise.resolve(
+      failure(503, "browser_origin_invalid", "BROWSER_APP_ORIGIN must be a single HTTPS origin without a path."),
+    );
   if (!METHODS.has(request.method))
     return Promise.resolve(failure(405, "method_not_allowed", "This method is not supported."));
   if (
     request.method !== "GET" &&
-    (request.headers.get("Origin") !== new URL(request.url).origin ||
+    (request.headers.get("Origin") !== (browserOrigin ?? requestUrl.origin) ||
       request.headers.get("X-OpenBot-Browser") !== "1" ||
       !browserWriteContentTypeAllowed(request, path))
   )
@@ -159,6 +167,15 @@ export function handleBrowserApi(request: Request, services: BrowserApiServices)
   if (request.headers.get("Sec-Fetch-Site") === "cross-site")
     return Promise.resolve(failure(403, "browser_request_refused", "The browser request was refused."));
   return runApiResponse(handleBrowserOperation(request, path, services), services.errorResponse);
+}
+
+function validBrowserAppOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.origin === value;
+  } catch {
+    return false;
+  }
 }
 
 const handleBrowserOperation = Effect.fn("BrowserApi.handleOperation")(function* (

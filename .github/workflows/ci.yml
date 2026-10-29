@@ -21,10 +21,9 @@ env:
 
 jobs:
   detect:
-    # A pull request runs each lane only when a path the lane reads changed. A path every
-    # workspace reads - the lockfile, a shared package, a workflow - runs all of them. A push to
-    # main and a manual run always run every lane: `deploy-production` needs them, and a skipped
-    # need would skip the deploy.
+    # A pull request runs each lane only when a path the lane reads changed.
+    # Shared workspace inputs select every affected lane.
+    # A push to main or a manual run checks every lane. Cloud deployment remains explicit.
     #
     # `code` runs for every change except Markdown that no build or test reads: lint and knip cover
     # every workspace. `docs` runs for any Markdown change, so that `Check` still checks its links. `desktop` lists what it skips, not what it reads: the other apps, which the
@@ -774,12 +773,7 @@ jobs:
           if-no-files-found: ignore
 
   api:
-    # `check:api` ends with `api:build:check`, the preview build of the Worker. For a pull request
-    # from this repository, this job uploads that build. It has no write token, and its only secret
-    # is the read-only key of the private home page beam repository (see `LandingBeam.tsx`). The
-    # trusted `cloudflare-preview.yml` workflow uploads the build and comments on the pull request
-    # after this run completes; it runs code from `main` only. Forks get no preview. A pull request
-    # that skips this lane, or fails it, keeps the preview of its last commit that built one.
+    # Build and check the Worker without publishing a preview or using production bindings.
     name: API
     needs: detect
     if: needs.detect.outputs.api == 'true'
@@ -817,16 +811,6 @@ jobs:
       - name: Check API
         run: bun run check:api
 
-      - name: Upload preview build
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cloudflare-preview
-          path: apps/auth-api/dist
-          # The build writes `.assetsignore`, which keeps the config out of the public assets.
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 3
 
   storybook:
     name: Storybook build
@@ -874,231 +858,3 @@ jobs:
             esac
           done
 
-  deploy-production:
-    name: Deploy Cloudflare production
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # `surfaces` gates the deploy even though the Worker it ships lives in
-    # `apps/auth-api`, which `api` already covers: mobile, the site router, the
-    # team client and the remote stack all consume the account API, so a red
-    # Surfaces is the signal that this deploy is the thing about to break them.
-    needs: [check, browser, tests-desktop, signal-e2e, automation-cli-e2e, team-api-routes-e2e, reverse-actions-e2e, provider-fakes-e2e, api, storybook, surfaces, mobile-share-sender-e2e]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: cloudflare-production
-    # Template selection changes Worker settings. Do not race a Worker deployment.
-    concurrency:
-      group: cloudflare-production-worker
-      cancel-in-progress: false
-      queue: max
-    permissions:
-      contents: read
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Production always has the home page beam. Without the key, the deploy stops here.
-      - name: Check out the home page beam
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: nightly-labs/openbot-laser-flow
-          ssh-key: ${{ secrets.LASER_FLOW_DEPLOY_KEY }}
-          path: apps/auth-api/src/vendor/laser-flow
-          persist-credentials: false
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-
-      - name: Build production Worker
-        run: bun run api:build
-
-      - name: Prepare runtime secrets
-        id: runtime-secrets
-        shell: bash
-        env:
-          EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
-          SKILLS_ADMIN_TOKEN: ${{ secrets.SKILLS_ADMIN_TOKEN }}
-          SITE_OPERATIONS_ADMIN_TOKEN: ${{ secrets.SITE_OPERATIONS_ADMIN_TOKEN }}
-          SERVER_CLAIMS_ADMIN_TOKEN: ${{ secrets.SERVER_CLAIMS_ADMIN_TOKEN }}
-          SITE_REPORT_HASH_SECRET: ${{ secrets.SITE_REPORT_HASH_SECRET }}
-          REMOTE_TICKET_PRIVATE_JWK: ${{ secrets.REMOTE_TICKET_PRIVATE_JWK }}
-          REMOTE_TICKET_PUBLIC_JWKS: ${{ secrets.REMOTE_TICKET_PUBLIC_JWKS }}
-          REMOTE_AUTH_WEBHOOK_SECRET: ${{ secrets.REMOTE_AUTH_WEBHOOK_SECRET }}
-          OPENPANEL_CLIENT_ID: ${{ secrets.OPENPANEL_CLIENT_ID }}
-          OPENPANEL_CLIENT_SECRET: ${{ secrets.OPENPANEL_CLIENT_SECRET }}
-          # Optional: an unset value keeps the value that the Worker has. See docs/hosted-servers.md.
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
-          BOAT_WEBHOOK_SECRET: ${{ secrets.BOAT_WEBHOOK_SECRET }}
-          # GitHub refuses an Actions secret name that starts with GITHUB_. The Worker name is GITHUB_APP_PRIVATE_KEY.
-          OPENBOT_GITHUB_APP_PRIVATE_KEY: ${{ secrets.OPENBOT_GITHUB_APP_PRIVATE_KEY }}
-          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
-          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
-          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT }}
-        run: |
-          secrets_path="$RUNNER_TEMP/openbot-worker-secrets.json"
-          umask 077
-          SECRETS_PATH="$secrets_path" bun -e '
-            const smtp = process.env.EMAIL_SMTP_PASSWORD;
-            const skillsAdmin = process.env.SKILLS_ADMIN_TOKEN;
-            const siteOperationsAdmin = process.env.SITE_OPERATIONS_ADMIN_TOKEN;
-            const serverClaimsAdmin = process.env.SERVER_CLAIMS_ADMIN_TOKEN;
-            const siteReportHash = process.env.SITE_REPORT_HASH_SECRET;
-            const remotePrivateJwk = process.env.REMOTE_TICKET_PRIVATE_JWK;
-            const remotePublicJwks = process.env.REMOTE_TICKET_PUBLIC_JWKS;
-            const remoteWebhookSecret = process.env.REMOTE_AUTH_WEBHOOK_SECRET;
-            const openpanelClientId = process.env.OPENPANEL_CLIENT_ID?.trim();
-            const openpanelClientSecret = process.env.OPENPANEL_CLIENT_SECRET?.trim();
-            if (!openpanelClientId || !openpanelClientSecret) {
-              throw new Error("OPENPANEL_CLIENT_ID and OPENPANEL_CLIENT_SECRET are required for production analytics.");
-            }
-            const path = process.env.SECRETS_PATH;
-            if (
-              !smtp ||
-              !skillsAdmin ||
-              !siteReportHash ||
-              !remotePrivateJwk ||
-              !remotePublicJwks ||
-              !remoteWebhookSecret ||
-              !path
-            ) {
-              throw new Error("Required production secrets are missing.");
-            }
-            // A Stripe or boat key without its webhook secret takes payments or makes sandboxes that
-            // the Worker never sees, so each pair is set together or not at all.
-            const optional = {};
-            for (const names of [
-              ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
-              ["BOAT_API_KEY", "BOAT_WEBHOOK_SECRET"],
-              // The Live Activity relay stays off until both are set.
-              ["APNS_PRIVATE_KEY", "APNS_KEY_ID"],
-            ]) {
-              const present = names.filter((name) => process.env[name]?.trim());
-              if (present.length === 0) continue;
-              if (present.length !== names.length) throw new Error(`Set ${names.join(" and ")} together.`);
-              for (const name of names) optional[name] = process.env[name].trim();
-            }
-            const githubAppKey = process.env.OPENBOT_GITHUB_APP_PRIVATE_KEY?.trim();
-            if (githubAppKey) optional.GITHUB_APP_PRIVATE_KEY = githubAppKey;
-            // The Android notification relay stays off until the Firebase service account key is set.
-            const fcmServiceAccount = process.env.FCM_SERVICE_ACCOUNT?.trim();
-            if (fcmServiceAccount) {
-              let parsed;
-              try {
-                parsed = JSON.parse(fcmServiceAccount);
-              } catch {
-                parsed = null;
-              }
-              if (parsed?.type !== "service_account") throw new Error("FCM_SERVICE_ACCOUNT is not a Firebase service account key file.");
-              optional.FCM_SERVICE_ACCOUNT = fcmServiceAccount;
-            }
-            const stripeKey = optional.STRIPE_SECRET_KEY;
-            if (stripeKey && !stripeKey.startsWith("sk_live_") && !stripeKey.startsWith("rk_live_")) {
-              throw new Error("STRIPE_SECRET_KEY is not a live key.");
-            }
-            const secrets = {
-              ...optional,
-              OPENPANEL_CLIENT_ID: openpanelClientId,
-              OPENPANEL_CLIENT_SECRET: openpanelClientSecret,
-              EMAIL_SMTP_PASSWORD: smtp,
-              SKILLS_ADMIN_TOKEN: skillsAdmin,
-              SITE_REPORT_HASH_SECRET: siteReportHash,
-              ...(siteOperationsAdmin ? { SITE_OPERATIONS_ADMIN_TOKEN: siteOperationsAdmin } : {}),
-              ...(serverClaimsAdmin ? { SERVER_CLAIMS_ADMIN_TOKEN: serverClaimsAdmin } : {}),
-              REMOTE_TICKET_PRIVATE_JWK: remotePrivateJwk,
-              REMOTE_TICKET_PUBLIC_JWKS: remotePublicJwks,
-              REMOTE_AUTH_WEBHOOK_SECRET: remoteWebhookSecret,
-            };
-            await Bun.write(path, JSON.stringify(secrets));
-          '
-          echo "path=$secrets_path" >> "$GITHUB_OUTPUT"
-
-      - name: Apply production D1 migrations
-        working-directory: apps/auth-api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: ../../node_modules/.bin/wrangler d1 migrations apply DB --remote --config wrangler.jsonc
-
-      - name: Deploy public site router
-        working-directory: apps/site-router
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_SITE_ROUTER_DEPLOY_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: ../../node_modules/.bin/wrangler deploy --config wrangler.jsonc --keep-vars
-
-      - name: Deploy production Worker
-        working-directory: apps/auth-api
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: ../../node_modules/.bin/wrangler deploy --config dist/server/wrangler.json --keep-vars --secrets-file "${{ steps.runtime-secrets.outputs.path }}"
-
-      - name: Remove temporary runtime secrets
-        if: always() && steps.runtime-secrets.outputs.path != ''
-        run: rm -f "${{ steps.runtime-secrets.outputs.path }}"
-
-      - name: Verify production deployment
-        shell: bash
-        env:
-          SITE_HOSTING_EXPECTED_ENABLED: ${{ vars.SITE_HOSTING_EXPECTED_ENABLED }}
-        # Each check names the URL and the value that it received when it fails. A bare `test` or
-        # `grep -q` stops the step with no message, and the logs of earlier failures could not show
-        # which check failed. The received headers include `cf-cache-status` and `age`, which show
-        # whether the edge served a cached response of the previous Worker version.
-        run: |
-          verification_dir="$(mktemp -d)"
-          trap 'rm -rf "$verification_dir"' EXIT
-          fail() {
-            echo "::error title=Verify production deployment::$1"
-            exit 1
-          }
-          require_status() {
-            test "$1" = "$2" || fail "$3 returned HTTP $1. Expected HTTP $2."
-          }
-          require_header() {
-            if ! tr -d '\r' < "$1" | grep -Eiq "$2"; then
-              echo "Response headers of $3:"
-              tr -d '\r' < "$1"
-              fail "$3 has no response header that matches '$2'."
-            fi
-          }
-          curl --fail --silent --show-error --retry 5 --retry-all-errors https://openbot.run/ >/dev/null
-          join_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
-            --max-redirs 0 --dump-header "$verification_dir/join.headers" \
-            --output "$verification_dir/join.html" --write-out '%{http_code}' \
-            https://openbot.run/join)"
-          require_status "$join_status" 200 https://openbot.run/join
-          require_header "$verification_dir/join.headers" '^cache-control:.*no-store' https://openbot.run/join
-          require_header "$verification_dir/join.headers" '^referrer-policy:.*no-referrer' https://openbot.run/join
-          association_url=https://openbot.run/.well-known/apple-app-site-association
-          association_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
-            --max-redirs 0 --dump-header "$verification_dir/association.headers" \
-            --output "$verification_dir/association.json" --write-out '%{http_code}' \
-            "$association_url")"
-          require_status "$association_status" 200 "$association_url"
-          require_header "$verification_dir/association.headers" '^content-type: application/json' "$association_url"
-          if ! jq -e '.applinks.details == [{"appID":"ZTRDTUL87R.app.openbot.desktop","paths":["/join"]},{"appID":"ZTRDTUL87R.run.openbot.mobile","paths":["/join","/agents/*"]}]' \
-            "$verification_dir/association.json" >/dev/null; then
-            echo "Response headers of $association_url:"
-            tr -d '\r' < "$verification_dir/association.headers"
-            echo "Response body of $association_url (first 4000 bytes):"
-            head -c 4000 "$verification_dir/association.json"
-            echo
-            fail "$association_url does not have the expected applinks.details."
-          fi
-          curl --fail --silent --show-error --retry 5 --retry-all-errors https://api.openbot.run/health/live >/dev/null
-          curl --fail --silent --show-error --retry 5 --retry-all-errors https://api.openbot.run/health/ready >/dev/null
-          site_url=https://deployment-smoke-check.openbot.site/
-          site_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
-            --max-redirs 0 --dump-header "$verification_dir/site-router.headers" \
-            --output "$verification_dir/site-router.txt" --write-out '%{http_code}' \
-            "$site_url")"
-          case "$SITE_HOSTING_EXPECTED_ENABLED" in
-            true) require_status "$site_status" 404 "$site_url" ;;
-            false) require_status "$site_status" 503 "$site_url" ;;
-            *) fail "SITE_HOSTING_EXPECTED_ENABLED must be true or false." ;;
-          esac
-          require_header "$verification_dir/site-router.headers" '^cache-control:.*no-store' "$site_url"
-          require_header "$verification_dir/site-router.headers" '^x-content-type-options:.*nosniff' "$site_url"
-          require_header "$verification_dir/site-router.headers" '^x-robots-tag:.*noindex' "$site_url"

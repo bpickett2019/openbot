@@ -19,17 +19,13 @@ decrypted development settings, then generated defaults. An explicit empty value
 Shared settings do not replace the local ticket keys, auth webhook secret, report hash secret, or
 skills admin token. Shell values and saved overrides can replace these local values.
 
-The encrypted `.env.dev` holds the Stripe sandbox keys, the development `BOAT_API_KEY`, and the webhook secrets of the `test`
-Worker. The boat key creates real VMs, but only when the Worker also has
-`HOSTED_SERVER_TEMPLATE`. `wrangler.jsonc` sets
-`HOSTED_SERVERS_ENABLED` to `true` and `HOSTED_SERVERS_ALLOWED_USER_IDS` to `*`, so a local Worker
-with a template lets each local account create one. Set `HOSTED_SERVERS_ALLOWED_USER_IDS` in the
-shell to limit access. A VM cannot reach a local Worker, so use `bun run dev --hosting=test` for a real server (see
-[Real servers from a development build](../../docs/hosted-servers.md#real-servers-from-a-development-build)).
-Set `DOTENV_PRIVATE_KEY_DEV` in your shell profile to load the shared values in every worktree.
-Without this key, the Worker starts with generated local defaults and no Stripe or boat keys. Shell
-values override shared values. Development commands do not read the root `.env.keys`; production
-commands continue to use that file.
+Managed hosting is disabled by default. It requires the explicit owned DigitalOcean/organization
+binding set, a normally signed-in owner and approved spending. A local Worker is not a reachable
+cloud control plane. See [hosted servers](../../docs/hosted-servers.md).
+
+Development can still load explicitly authorized shared development settings with
+`DOTENV_PRIVATE_KEY_DEV`; without it, generated local defaults are used. Owned production/test
+deployment and preview no longer load upstream `.env.production` or root decryption keys.
 
 ### Stripe sandbox
 
@@ -45,47 +41,31 @@ shell as `STRIPE_WEBHOOK_SECRET`:
 stripe listen --forward-to http://127.0.0.1:3100/v1/stripe/webhook
 ```
 
-For the `test` Worker, `bun run hosting:setup --target=test` makes or updates its Stripe and boat
-webhooks and writes their signing secrets to `.env.dev`. Run it with `DOTENV_PRIVATE_KEY_DEV`
-set in the shell. Then run `bun run api:deploy:test`. It
-also sets the allow list from `HOSTED_SERVERS_TEST_ALLOW_LIST` and the developer key
-`HOSTED_SERVERS_DEVELOPER_KEY` from `.env.dev`.
+`hosting:setup` is now the operator-only organization allocation/funding CLI, not a Stripe or
+provider-webhook setup command. Configure a Stripe sandbox and its webhook explicitly when
+testing ordinary subscription/license behavior.
 
-`scripts/stripe-flows-e2e.ts` checks the plan flows against the sandbox and a local Worker: renewal,
-failed renewal, cancel at the period end, plan change, renew, delete, another account's server, a
-deleted customer, a refund, a dispute, and the welcome email of a first plan. The `license-*`
-scenarios check the license: buy, Checkout, one open Checkout page, change users, the user count,
-renewal, failed renewal, currency, isolation from the server plans, and the user limit at a join. Each scenario uses a Stripe
-test clock and deletes it at the end. Start the Worker
-with `HOSTED_SERVERS_ENABLED=true`, `HOSTED_SERVERS_ALLOWED_USER_IDS` set to the output of
-`bun scripts/stripe-flows-e2e.ts --print-user-ids`, `HOSTED_SERVER_TEMPLATE=e2e-template`, and
-`BOAT_API_KEY=e2e-invalid-key`, and forward the webhooks to it. Without a template, hosting is off and
-each server scenario fails with `hosting_unavailable`. A value in the shell overrides `.env.dev`; without the fake key, each paid
-scenario creates a real boat VM. Then, from the
-repository root:
+`scripts/stripe-flows-e2e.ts` retains the genuine Stripe billing and license scenarios. It requires
+a test-mode key, an intended isolated API endpoint and authorized sandbox access; it does not
+prove native hosted storage. The retired Boat provisioning scenario and fake-template workaround
+are removed. Do not run it against customer data.
 
-```bash
+```sh
 bun scripts/stripe-flows-e2e.ts --api http://127.0.0.1:<port> [scenario ...]
 ```
 
-The `portal` scenario prints a Customer Portal cancel page and then an update page, and waits until
-you use them. The report goes to `.openbot-build/stripe-flows-e2e.json`.
+The interactive `portal` scenario waits for the operator. Reports go to
+`.openbot-build/stripe-flows-e2e.json`. Organization lifecycle checks use migrated SQLite and a
+synthetic provider transport instead:
 
-The `boat` scenario runs only when you name it. It pays for a server, waits until OpenBot in the VM
-signs in and publishes the host, restarts the service to check the stored session, and deletes the
-server. It needs the real `BOAT_API_KEY`, a template from `bun run hosting:template` whose
-`--auth-api-url` reaches your Worker (for example a `cloudflared tunnel --url` to its port), and
-`HOSTED_SERVER_TEMPLATE` set to that template. Start the Worker with
-`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.trycloudflare.com`, or Vite refuses the tunnel host. A boat
-trial account allows only `small` and `default`, so use a Starter or Standard plan there.
+```sh
+bun run test:hosted-lifecycle
+bun run test:cloud-authorization
+bun run test:remote-auth-events
+```
 
-`bun run api:deploy:test` loads the `.env.dev` values before `.env.production`. Shell
-values still win, so the test Worker gets the sandbox keys and never live keys.
-
-`.env.production` is the encrypted production file, and its private key stays in the ignored root
-`.env.keys`. Production commands decrypt it only in process memory. Development commands use the
-shell key described above and never read the root key file. New worktrees do not copy root
-`.env.keys`; run production commands from a checkout that has the existing production key file.
+`api:deploy:test` now invokes the owned deployment wrapper directly with `--env test`. It needs
+explicit owned inputs and a Worker name ending in `-test`; it loads no shared/production secret file.
 
 ```bash
 bun run api:migrate:local
@@ -95,15 +75,9 @@ bun run dev:api
 The local address is `http://127.0.0.1:3100`. The explicit development flag
 returns the sign-in code in the API response. It never writes the code to logs.
 
-Update and validate the encrypted production file with these commands:
-
-```bash
-printf '%s' '<APP_PASSWORD>' | bun run env:set:smtp
-bun run env:validate:prod
-```
-
-Commit the encrypted `.env.production` and `.env.dev` files. Never commit `.env.keys` or local
-state from `.openbot/`.
+Keep owned deployment secrets in a secret manager. Follow
+[the account deployment guide](../../docs/self-hosting.md#2-deploy-the-account-service), beginning
+with `--check`. Do not commit plaintext secrets, `.env.keys` or local `.openbot/` state.
 
 ## Article artwork
 
@@ -151,26 +125,18 @@ because `AUTH_EXPOSE_DEVELOPMENT_CODE` returns its code in the API response. To
 exercise real delivery locally, put a full set in the ignored `.dev.vars` file:
 
 ```dotenv
-EMAIL_SMTP_HOST=mail.privateemail.com
+EMAIL_SMTP_HOST=smtp.example.com
 EMAIL_SMTP_PORT=465
-EMAIL_SMTP_USERNAME=hello@openbot.run
-EMAIL_SMTP_PASSWORD=<PRIVATE_EMAIL_APP_PASSWORD>
-EMAIL_FROM=hello@openbot.run
+EMAIL_SMTP_USERNAME=sender@example.com
+EMAIL_SMTP_PASSWORD=<OWN_SMTP_PASSWORD>
+EMAIL_FROM=sender@example.com
 ```
 
-`bun run env:set:smtp` encrypts the app password into `.env.production` only.
-
-For a deployed Worker, `bun run api:deploy` decrypts `.env.production`. It sends
-`EMAIL_SMTP_PASSWORD`, `SKILLS_ADMIN_TOKEN`, `REMOTE_TICKET_PRIVATE_JWK`,
-`REMOTE_TICKET_PUBLIC_JWKS`, `REMOTE_AUTH_WEBHOOK_SECRET`, and `SITE_REPORT_HASH_SECRET` to
-`wrangler secret put` through standard input, and `GITHUB_APP_PRIVATE_KEY` when it is set. It then
-builds and deploys the Worker. Production deployment preserves `HOSTED_SERVER_TEMPLATE`; the
-desktop release workflow owns that setting. Test deployment can still set its own template.
-
-Production also requires `OPENPANEL_CLIENT_ID` and `OPENPANEL_CLIENT_SECRET` from an OpenPanel
-write-only server client. Keep both in the encrypted `.env.production` for local deployment and in
-the `cloudflare-production` GitHub Environment for CI. Both deployment paths check these values
-before remote changes. Test deployments do not send account analytics.
+The owned deployer reads explicit shell/secret-manager inputs, verifies the signing key pair and
+owned resource identities, checks D1/R2 before mutation, then uploads secrets through stdin,
+applies migrations and builds/deploys the owned configuration. `--check` makes no provider call.
+It does not decrypt upstream production files, preserve a Boat template, or require upstream
+analytics/private artwork. Use the [binding reference](../../docs/self-hosting.md).
 
 `GITHUB_APP_PRIVATE_KEY` is the OpenBot GitHub App's private key as a PKCS #8 PEM. GitHub gives a
 PKCS #1 key; convert it with `openssl pkcs8 -topk8 -nocrypt -in <key>.pem`. With the key, the
@@ -180,15 +146,14 @@ agent's work. With no key, the desktop acts as the signed-in user. In GitHub Act
 Secrets are never passed as process arguments. The other values are Worker
 variables. The SMTP connection uses TLS from the start and accepts only port 465.
 
-GitHub Actions reads the remote-control secrets, `SKILLS_ADMIN_TOKEN`, `SITE_REPORT_HASH_SECRET`, and the optional
-`SITE_OPERATIONS_ADMIN_TOKEN` and `SERVER_CLAIMS_ADMIN_TOKEN` from the `cloudflare-production` Environment. It includes
-them in Wrangler's temporary runtime secrets file.
+CI performs source/build checks; owned account publication is explicit. No upstream GitHub
+Environment or preview-publication workflow is a deployment prerequisite.
 
 `SERVER_CLAIMS_ADMIN_TOKEN` lets an operator sign a new server in for a user without an email code: see
 [server claims](../../docs/self-hosted-server.md#sign-in-with-a-server-claim). Without it, the endpoint answers 401.
 
-Use `bun run api:deploy:test` for the isolated `openbot-auth-api-test` Worker
-and the `openbot-auth-test` D1 database.
+Use `bun run api:deploy:test --check` with your own `-test` Worker and D1/R2 inputs before any
+approved test deployment. No upstream test database is selected automatically.
 
 As a fallback, set `EMAIL_DELIVERY_WEBHOOK_URL` to an HTTPS endpoint. OpenBot
 sends this JSON:
@@ -219,12 +184,13 @@ counts in each location separately, so it cannot hold a total. Without SMTP the 
 
 ## Cloudflare deployment
 
-Create the D1 database and replace the placeholder `database_id` in
-`wrangler.jsonc`. Apply remote migrations and set delivery secrets through
-Wrangler. Then deploy the Worker.
+Create owned D1/R2 resources and supply the explicit inputs in
+[self-hosting](../../docs/self-hosting.md). The wrapper generates private temporary configuration;
+do not insert live identifiers or secrets in the checked-in local template.
 
 ```bash
-bun run api:migrate:remote
+bun run api:deploy --check
+# Only with deployment/spending approval and real owned inputs:
 bun run api:deploy
 ```
 
@@ -247,7 +213,7 @@ expired or consumed email challenges, expired or revoked sessions, expired or
 consumed team authentication tickets, and expired rate-limit records. A successful
 retention run logs only aggregate deletion counts.
 
-The `preview` and `test` environments do not install an automatic Cron Trigger.
+The isolated `--env test` deployment does not install automatic Cron Triggers.
 To run the scheduled handler during local development, start the API and request
 the Cloudflare scheduled-handler test route:
 
@@ -263,10 +229,10 @@ the public key so the separate Signal service can verify tickets without a D1
 request. The old Team Tunnel provisioning endpoint returns `426` and does not
 create a Cloudflare Tunnel.
 
-Set the private JWK, public JWKS, active key ID, Signal URL, and webhook secret in
-the encrypted environment. The private and public keys must use ES256. The Signal
-URL must point to a DNS-only host. Cloudflare carries only account and configuration
-requests. It does not carry Team API or Remote Desktop data.
+Supply an owned ES256 signing key/public JWKS, key ID, Signal URL and shared webhook secret.
+The Signal URL is the owned Cloudflare Worker. Direct WebRTC stays peer-to-peer; Cloudflare
+Realtime TURN can carry encrypted traffic when relaying is necessary. Neither Signal nor TURN
+has the peers' application plaintext. See [Signal deployment](../../docs/remote-session-deployment.md).
 
 To deploy your own copy of this Worker with your own Signal, see
 [Self-hosted remote access](../../docs/self-hosting.md).

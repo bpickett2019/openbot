@@ -4,9 +4,10 @@ import type { messages as source } from "../../en/error/billing";
 export const messages = {
   "error.billing.lifecycleFailed": "Sunucu planı değiştirilemedi. Faturalandırma'yı yenileyin ve tekrar deneyin.",
   "error.billing.confirmMismatch": "Silmek için sunucu adını yazın.",
-  "error.billing.restartBusy": "Sunucu şu anda yeniden başlatılamıyor. Bir dakika sonra tekrar deneyin.",
-  "error.billing.planRequired": "Bu sunucunun planı sona erdi. Sunucuyu başlatmak için planı yenileyin.",
-  "error.billing.planSoldOut": "Bu plan tükendi. Başka bir plan seçin.",
+  "error.billing.organizationManaged":
+    "Bu ana makineyi bir yönetici yönetir. Ödeme ve plan değişiklikleri kullanılamaz.",
+  "error.billing.fundingRevoked":
+    "Finansman etkin değil. Bu sunucuyu başlatmadan önce yöneticinizden finansmanı yeniden etkinleştirmesini isteyin.",
   // Masaüstü ve web istemcilerinin oluşturduğu faturalandırma hataları.
   "error.billing.licenseExists": "Bu hesabın zaten bir lisansı var. Bunun yerine kullanıcı sayısını değiştirin.",
   "error.billing.licenseCurrency": "Lisans, diğer planlarınızın para birimini kullanmalıdır.",

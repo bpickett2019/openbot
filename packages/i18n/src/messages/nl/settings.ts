@@ -417,6 +417,12 @@ export const messages = {
   "settings.hostedServers.description": "Elke server heeft eigen agents, bestanden en routines.",
   "settings.hostedServers.add": "Server toevoegen",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB geheugen, {disk} GB opslag",
+  "settings.hostedServers.organizationFunded": "Door organisatie gefinancierd",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB geheugen, {disk} GB permanente opslag · {region}",
+  "settings.hostedServers.administratorStopped": "Door beheerder gestopt",
+  "settings.hostedServers.fundingRevokedDescription":
+    "De financiering is niet actief. Vraag je beheerder deze te herstellen voordat je deze server start.",
   "settings.hostedServers.creating": "Maken…",
   "settings.hostedServers.usageNote":
     "Een server stopt ongeveer 15 minuten na het laatste bericht of de laatste wijziging, ook als er een app open is. Een toetsaanslag of klik in de app, een bericht of een geplande routine start hem weer. De agents en routines ervan werken als deze computer uit staat.",

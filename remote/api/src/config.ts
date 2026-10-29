@@ -11,10 +11,8 @@ export interface RemoteApiConfig {
   controlPlaneUrl: string;
   sessionSecret: string;
   authWebhookSecret: string;
-  turnSecret: string;
-  turnHost: string;
-  turnPort: number;
-  turnTlsPort: number;
+  turn: { keyId: string; apiToken: string; apiOrigin: string } | null;
+  allowedOrigins: string[];
   metricsToken: string | null;
   maximumConnectionsPerUser: number;
   maximumConnectionsPerIp: number;
@@ -156,10 +154,8 @@ export function readRemoteApiConfig(environment: Record<string, string | undefin
     controlPlaneUrl: required(environment.REMOTE_CONTROL_PLANE_URL, "REMOTE_CONTROL_PLANE_URL"),
     sessionSecret: strongSecret(environment.REMOTE_SESSION_SECRET, "REMOTE_SESSION_SECRET"),
     authWebhookSecret: strongSecret(environment.REMOTE_AUTH_WEBHOOK_SECRET, "REMOTE_AUTH_WEBHOOK_SECRET"),
-    turnSecret: strongSecret(environment.TURN_SHARED_SECRET, "TURN_SHARED_SECRET"),
-    turnHost: required(environment.TURN_HOST, "TURN_HOST"),
-    turnPort: positiveInteger(environment.TURN_PORT, 3478),
-    turnTlsPort: positiveInteger(environment.TURN_TLS_PORT, 5349),
+    turn: readTurnConfig(environment),
+    allowedOrigins: readAllowedOrigins(environment.REMOTE_ALLOWED_ORIGINS),
     metricsToken: optional(environment.REMOTE_METRICS_TOKEN),
     maximumConnectionsPerUser: positiveInteger(environment.REMOTE_MAX_CONNECTIONS_PER_USER, 32),
     maximumConnectionsPerIp: positiveInteger(environment.REMOTE_MAX_CONNECTIONS_PER_IP, 32),
@@ -174,6 +170,45 @@ export function readRemoteApiConfig(environment: Record<string, string | undefin
       environment.DISCORD_MESSAGE_CONTENT,
     ),
   };
+}
+
+function readTurnConfig(environment: Record<string, string | undefined>): RemoteApiConfig["turn"] {
+  const keyId = optional(environment.CLOUDFLARE_TURN_KEY_ID);
+  const apiToken = optional(environment.CLOUDFLARE_TURN_API_TOKEN);
+  if (!keyId && !apiToken) return null;
+  if (!keyId || !apiToken || !/^[A-Za-z0-9_-]{1,128}$/u.test(keyId))
+    throw new Error("CLOUDFLARE_TURN_KEY_ID and CLOUDFLARE_TURN_API_TOKEN must both be configured.");
+  let apiOrigin = "https://rtc.live.cloudflare.com";
+  // Only the isolated local process smoke can redirect the issuer. Production has one fixed origin.
+  const localOrigin = optional(environment.REMOTE_TURN_API_ORIGIN);
+  if (localOrigin) {
+    const url = new URL(localOrigin);
+    if (
+      environment.NODE_ENV === "production" ||
+      environment.REMOTE_SIGNAL_HOST !== "127.0.0.1" ||
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.origin !== localOrigin
+    )
+      throw new Error("REMOTE_TURN_API_ORIGIN is restricted to a loopback development service.");
+    apiOrigin = localOrigin;
+  }
+  return { keyId, apiToken, apiOrigin };
+}
+
+function readAllowedOrigins(value: string | undefined): string[] {
+  const origins = (value ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((entry) => {
+      const origin = entry.trim();
+      const url = new URL(origin);
+      if (url.origin !== origin || !["https:", "http:"].includes(url.protocol))
+        throw new Error("REMOTE_ALLOWED_ORIGINS must contain canonical HTTP or HTTPS origins.");
+      return origin;
+    });
+  // The released desktop's sandboxed WebRTC window loads this application origin.
+  return ["openbot-app://app", ...origins];
 }
 
 function required(value: string | undefined, name: string): string {

@@ -5,9 +5,10 @@ export const messages = {
   "error.billing.lifecycleFailed":
     "Der Servertarif konnte nicht geändert werden. Lade „Abrechnung“ neu und versuche es erneut.",
   "error.billing.confirmMismatch": "Gib den Servernamen ein, um ihn zu löschen.",
-  "error.billing.restartBusy": "Der Server kann jetzt nicht neu starten. Versuche es in einer Minute erneut.",
-  "error.billing.planRequired": "Der Tarif dieses Servers ist abgelaufen. Verlängere ihn, um den Server zu starten.",
-  "error.billing.planSoldOut": "Dieser Tarif ist ausverkauft. Wähle einen anderen Tarif.",
+  "error.billing.organizationManaged":
+    "Ein Administrator verwaltet diesen Host. Zahlung und Tarifwechsel sind nicht verfügbar.",
+  "error.billing.fundingRevoked":
+    "Die Finanzierung ist inaktiv. Bitte deinen Administrator, sie vor dem Serverstart wieder zu aktivieren.",
   "error.billing.licenseExists": "Dieses Konto hat bereits eine Lizenz. Ändern Sie stattdessen ihre Nutzerzahl.",
   "error.billing.licenseCurrency": "Die Lizenz muss die Währung Ihrer anderen Pläne verwenden.",
   "error.billing.licenseUsersInUse":

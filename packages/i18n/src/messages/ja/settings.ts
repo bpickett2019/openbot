@@ -395,6 +395,12 @@ export const messages = {
   "settings.hostedServers.description": "各サーバーには専用のエージェント、ファイル、ルーティンがあります。",
   "settings.hostedServers.add": "サーバーを追加",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU、{memory} GB メモリー、{disk} GB ストレージ",
+  "settings.hostedServers.organizationFunded": "組織負担",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU、{memory} GB メモリー、{disk} GB 永続ストレージ · {region}",
+  "settings.hostedServers.administratorStopped": "管理者による停止",
+  "settings.hostedServers.fundingRevokedDescription":
+    "組織の費用負担が無効です。このサーバーを起動する前に、管理者に再開を依頼してください。",
   "settings.hostedServers.creating": "作成中…",
   "settings.hostedServers.usageNote":
     "サーバーは、最後のメッセージまたは変更から約 15 分後に停止します。アプリが開いている場合も同じです。アプリでのキー入力やクリック、メッセージ、スケジュールされたルーティンによって再び起動します。このコンピューターの電源が切れていても、サーバーのエージェントとルーティンは動作します。",

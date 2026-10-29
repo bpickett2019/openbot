@@ -3,7 +3,7 @@ import type { messages as source } from "../en/billing";
 
 export const messages = {
   "billing.title": "Оплата",
-  "billing.description": "У каждого сервера свой тариф. Платежи обрабатывает Stripe.",
+  "billing.description": "Тарифы серверов и финансирование организацией.",
   "billing.loading": "Загрузка данных об оплате…",
   "billing.unavailable": "Оплата недоступна на этом сервере аккаунтов.",
   "billing.loadFailed": "Не удалось загрузить данные об оплате.",

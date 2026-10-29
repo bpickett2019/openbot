@@ -4,9 +4,9 @@ import type { messages as source } from "../../en/error/billing";
 export const messages = {
   "error.billing.lifecycleFailed": "Не удалось изменить тариф сервера. Обновите раздел «Оплата» и повторите попытку.",
   "error.billing.confirmMismatch": "Введите название сервера, чтобы удалить его.",
-  "error.billing.restartBusy": "Сейчас сервер нельзя перезапустить. Повторите попытку через минуту.",
-  "error.billing.planRequired": "Тариф этого сервера закончился. Продлите его, чтобы запустить сервер.",
-  "error.billing.planSoldOut": "Этот тариф распродан. Выберите другой тариф.",
+  "error.billing.organizationManaged": "Этим хостом управляет администратор. Оплата и смена тарифа недоступны.",
+  "error.billing.fundingRevoked":
+    "Финансирование неактивно. Попросите администратора восстановить его перед запуском этого сервера.",
   "error.billing.licenseExists": "У этого аккаунта уже есть лицензия. Вместо этого измените число пользователей.",
   "error.billing.licenseCurrency": "Лицензия должна использовать валюту ваших других планов.",
   "error.billing.licenseUsersInUse":

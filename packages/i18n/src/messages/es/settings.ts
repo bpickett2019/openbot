@@ -406,6 +406,12 @@ export const messages = {
   "settings.hostedServers.description": "Cada servidor tiene sus propios agentes, archivos y rutinas.",
   "settings.hostedServers.add": "Añadir servidor",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB de memoria, {disk} GB de almacenamiento",
+  "settings.hostedServers.organizationFunded": "Financiado por la organización",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB de memoria, {disk} GB de almacenamiento persistente · {region}",
+  "settings.hostedServers.administratorStopped": "Parada administrativa",
+  "settings.hostedServers.fundingRevokedDescription":
+    "La financiación está inactiva. Pide al administrador que la restablezca antes de iniciar este servidor.",
   "settings.hostedServers.creating": "Creando…",
   "settings.hostedServers.usageNote":
     "Un servidor se detiene unos 15 minutos después del último mensaje o cambio, incluso con una aplicación abierta. Una tecla o un clic en la aplicación, un mensaje o una rutina programada lo inicia de nuevo. Sus agentes y rutinas funcionan con este equipo apagado.",

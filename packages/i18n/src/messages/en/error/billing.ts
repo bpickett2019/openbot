@@ -3,9 +3,10 @@ import { defineMessages } from "../../../message";
 export const messages = defineMessages("error.billing", {
   "error.billing.lifecycleFailed": "The server plan could not be changed. Refresh Billing and try again.",
   "error.billing.confirmMismatch": "Type the server name to delete it.",
-  "error.billing.restartBusy": "The server cannot restart now. Try again in a minute.",
-  "error.billing.planRequired": "The plan of this server ended. Renew it to start the server.",
-  "error.billing.planSoldOut": "This plan is sold out. Choose another plan.",
+  "error.billing.organizationManaged":
+    "An administrator manages this host. Checkout and plan changes are not available.",
+  "error.billing.fundingRevoked":
+    "Organization funding is inactive. Ask your administrator to restore funding before you start this server.",
   // License errors.
   "error.billing.licenseExists": "This account already has a license. Change its users instead.",
   "error.billing.licenseCurrency": "The license must use the currency of your other plans.",

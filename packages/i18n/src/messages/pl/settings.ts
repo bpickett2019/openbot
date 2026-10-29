@@ -415,6 +415,12 @@ export const messages = {
   "settings.hostedServers.description": "Każdy serwer ma własnych agentów, pliki i rutyny.",
   "settings.hostedServers.add": "Dodaj serwer",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB pamięci, {disk} GB miejsca",
+  "settings.hostedServers.organizationFunded": "Finansowany przez organizację",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB pamięci, {disk} GB trwałej przestrzeni · {region}",
+  "settings.hostedServers.administratorStopped": "Zatrzymany przez administratora",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Finansowanie jest nieaktywne. Poproś administratora o jego przywrócenie przed uruchomieniem tego serwera.",
   "settings.hostedServers.creating": "Tworzenie…",
   "settings.hostedServers.usageNote":
     "Serwer zatrzymuje się około 15 minut po ostatniej wiadomości lub zmianie, także gdy aplikacja jest otwarta. Naciśnięcie klawisza lub kliknięcie w aplikacji, wiadomość albo zaplanowana rutyna uruchamia go ponownie. Jego agenci i rutyny działają, gdy ten komputer jest wyłączony.",

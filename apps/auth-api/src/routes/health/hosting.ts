@@ -1,18 +1,12 @@
 import { env } from "cloudflare:workers";
 import { createFileRoute } from "@tanstack/solid-router";
 import { Effect } from "effect";
-import { BoatClient } from "../../server/boat-client";
+import { DigitalOceanClient } from "../../server/digitalocean-client";
 import { runApiResponse } from "../../server/effect-runtime";
 import { apiError } from "../../server/request-auth";
 import { requireWorkerBindings } from "../../server/types";
 
-/**
- * A sandbox ID that does not exist. A 404 for it shows that boat answers and accepts the key,
- * and the read changes nothing.
- */
-const PROBE_SANDBOX_ID = "openbot-status-probe";
-
-/** The status page checks every 5 minutes, but the route is public, so boat gets one call a minute at most. */
+/** Cache the read-only provider catalog check. This does not prove desktop readiness. */
 const CACHE_SECONDS = 60;
 
 const hostingResponse = (healthy: boolean) =>
@@ -34,7 +28,7 @@ export const Route = createFileRoute("/health/hosting")({
           Effect.gen(function* () {
             // One cache entry for every query string, so a query cannot skip the cache.
             const cacheKey = new Request(new URL("/health/hosting", request.url));
-            // A cache failure only costs one more boat call. It does not change the answer.
+            // A cache failure changes only the number of read-only provider requests.
             const cache = yield* Effect.tryPromise(() => caches.open("health-hosting")).pipe(
               Effect.orElseSucceed(() => null),
             );
@@ -43,13 +37,17 @@ export const Route = createFileRoute("/health/hosting")({
               : undefined;
             if (cached) return cached;
 
-            const apiKey = requireWorkerBindings(env).BOAT_API_KEY?.trim();
-            const healthy = apiKey
-              ? yield* new BoatClient({ apiKey }).getSandbox(PROBE_SANDBOX_ID).pipe(
-                  Effect.as(true),
-                  Effect.catchTag("BoatApiError", (error) => Effect.succeed(error.status === 404)),
-                )
-              : false;
+            const bindings = requireWorkerBindings(env);
+            const token = bindings.DIGITALOCEAN_API_TOKEN?.trim();
+            const size = bindings.HOSTED_DIGITALOCEAN_SIZE?.trim();
+            const region = bindings.HOSTED_DIGITALOCEAN_REGION?.trim();
+            const healthy =
+              token && size && region
+                ? yield* new DigitalOceanClient({ token }).checkSize(size, region).pipe(
+                    Effect.as(true),
+                    Effect.orElseSucceed(() => false),
+                  )
+                : false;
             const response = hostingResponse(healthy);
             if (cache) yield* Effect.tryPromise(() => cache.put(cacheKey, response.clone())).pipe(Effect.ignore);
             return response;

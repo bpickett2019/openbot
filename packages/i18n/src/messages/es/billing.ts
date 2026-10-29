@@ -3,7 +3,7 @@ import type { messages as source } from "../en/billing";
 
 export const messages = {
   "billing.title": "Facturación",
-  "billing.description": "Cada servidor tiene su propio plan. Stripe gestiona el pago.",
+  "billing.description": "Consulta los planes de servidor y la financiación de la organización.",
   "billing.loading": "Cargando facturación…",
   "billing.unavailable": "La facturación no está disponible en este servidor de cuentas.",
   "billing.loadFailed": "No se pudo cargar la facturación.",

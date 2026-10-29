@@ -7,7 +7,7 @@ import { BillingServerLifecycle, type BillingServerLifecycleAction } from "./Bil
 import type { BillingStore } from "./billing-store";
 
 export function BillingManagedServer(props: {
-  server: HostedServerSummary;
+  server: Extract<HostedServerSummary, { funding: "stripe" }>;
   plan: BillingServerPlan;
   paidThrough: number;
   billing: BillingStore;

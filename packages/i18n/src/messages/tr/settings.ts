@@ -398,6 +398,12 @@ export const messages = {
   "settings.hostedServers.description": "Her sunucunun kendi ajanları, dosyaları ve rutinleri vardır.",
   "settings.hostedServers.add": "Sunucu ekle",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} vCPU, {memory} GB bellek, {disk} GB depolama",
+  "settings.hostedServers.organizationFunded": "Kuruluş tarafından finanse edilir",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB bellek, {disk} GB kalıcı depolama · {region}",
+  "settings.hostedServers.administratorStopped": "Yönetici tarafından durduruldu",
+  "settings.hostedServers.fundingRevokedDescription":
+    "Finansman etkin değil. Bu sunucuyu başlatmadan önce yöneticinizden finansmanı yeniden etkinleştirmesini isteyin.",
   "settings.hostedServers.creating": "Oluşturuluyor…",
   "settings.hostedServers.usageNote":
     "Bir sunucu son mesajdan veya değişiklikten yaklaşık 15 dakika sonra durur, bir uygulama açık olsa bile. Uygulamada bir tuşa basmak veya tıklamak, bir mesaj ya da zamanlanmış bir rutin onu tekrar başlatır. Ajanları ve rutinleri bu bilgisayar kapalıyken çalışır.",

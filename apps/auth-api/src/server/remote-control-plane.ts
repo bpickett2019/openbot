@@ -570,7 +570,9 @@ export class RemoteControlPlane {
             dependencies.database
               .prepare(
                 `UPDATE remote_hosts SET name = ?, device_public_key = ?, updated_at = ?
-             WHERE host_id = ? AND owner_user_id = ?`,
+             WHERE host_id = ? AND owner_user_id = ? AND NOT EXISTS(
+               SELECT 1 FROM hosted_servers hs WHERE hs.server_id = remote_hosts.host_id
+               AND hs.funding = 'organization' AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))`,
               )
               .bind(name, devicePublicKey, now, hostId, user.id),
             dependencies.database
@@ -580,6 +582,8 @@ export class RemoteControlPlane {
              )
              SELECT ?, host_id, ?, 'owner', 'active', ?, ?
              FROM remote_hosts WHERE host_id = ? AND owner_user_id = ?
+             AND NOT EXISTS(SELECT 1 FROM hosted_servers hs WHERE hs.server_id = remote_hosts.host_id
+               AND hs.funding = 'organization' AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))
              ON CONFLICT(host_id, user_id) DO UPDATE SET
                role = 'owner', status = 'active', updated_at = excluded.updated_at`,
               )
@@ -594,6 +598,7 @@ export class RemoteControlPlane {
           );
         }
         const membership = yield* this.#requireRole(hostId, user.id, ["owner"]);
+        yield* this.#requireHostedFunding(hostId);
         return {
           hostId,
           name,
@@ -616,6 +621,8 @@ export class RemoteControlPlane {
               `DELETE FROM remote_host_key_handovers WHERE host_id = ? AND EXISTS(
              SELECT 1 FROM remote_hosts
              WHERE host_id = ? AND owner_user_id = ? AND device_public_key IS NOT ?
+             AND NOT EXISTS(SELECT 1 FROM hosted_servers hs WHERE hs.server_id = remote_hosts.host_id
+               AND hs.funding = 'organization' AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))
            )`,
             )
             .bind(hostId, hostId, user.id, devicePublicKey),
@@ -623,16 +630,20 @@ export class RemoteControlPlane {
             .prepare(
               `INSERT INTO remote_hosts(
              host_id, owner_user_id, name, device_public_key, machine_token_hash, auth_epoch, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+           ) SELECT ?, ?, ?, ?, ?, 1, ?, ? WHERE NOT EXISTS(
+             SELECT 1 FROM hosted_servers hs WHERE hs.server_id = ? AND hs.funding = 'organization'
+             AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))
            ON CONFLICT(host_id) DO UPDATE SET
              name = excluded.name,
              device_public_key = excluded.device_public_key,
              machine_token_hash = excluded.machine_token_hash,
              auth_epoch = remote_hosts.auth_epoch + 1,
              updated_at = excluded.updated_at
-           WHERE remote_hosts.owner_user_id = excluded.owner_user_id`,
+           WHERE remote_hosts.owner_user_id = excluded.owner_user_id AND NOT EXISTS(
+             SELECT 1 FROM hosted_servers hs WHERE hs.server_id = remote_hosts.host_id AND hs.funding = 'organization'
+             AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))`,
             )
-            .bind(hostId, user.id, name, devicePublicKey, machineTokenHash, now, now),
+            .bind(hostId, user.id, name, devicePublicKey, machineTokenHash, now, now, hostId),
           dependencies.database
             .prepare(
               `INSERT INTO remote_memberships(
@@ -640,6 +651,8 @@ export class RemoteControlPlane {
            )
            SELECT ?, host_id, ?, 'owner', 'active', ?, ?
            FROM remote_hosts WHERE host_id = ? AND owner_user_id = ?
+           AND NOT EXISTS(SELECT 1 FROM hosted_servers hs WHERE hs.server_id = remote_hosts.host_id
+             AND hs.funding = 'organization' AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))
            ON CONFLICT(host_id, user_id) DO UPDATE SET
              role = 'owner', status = 'active', updated_at = excluded.updated_at`,
             )
@@ -666,6 +679,7 @@ export class RemoteControlPlane {
         );
       }
       const ownerMembership = yield* this.#requireRole(hostId, user.id, ["owner"]);
+      yield* this.#requireHostedFunding(hostId);
       return {
         hostId,
         name,
@@ -1515,6 +1529,7 @@ export class RemoteControlPlane {
     function* (this: RemoteControlPlane, userId: string, hostId: string, authSessionHash: string) {
       const dependencies = yield* RemoteDependencies;
       const now = dependencies.now();
+      yield* this.#requireHostedFunding(hostId);
       // The role check and the reusable session are one row, so the common answer costs one read.
       const membership = yield* Effect.gen({ self: this }, function* () {
         const roleArgument0 = yield* remoteCall(() =>
@@ -1540,6 +1555,7 @@ export class RemoteControlPlane {
         return yield* remoteValidate(() => this.#assertRole(roleArgument0, roleArgument1));
       });
       if (membership.active_session_id !== null && membership.active_expires_at !== null) {
+        yield* this.#requireHostedFunding(hostId);
         return { sessionId: membership.active_session_id, hostId, expiresAt: membership.active_expires_at };
       }
       const sessionId = crypto.randomUUID();
@@ -1561,7 +1577,8 @@ export class RemoteControlPlane {
             WHERE EXISTS(
               SELECT 1 FROM auth_sessions
                WHERE token_hash = ? AND user_id = ? AND revoked_at IS NULL AND expires_at > ?
-            )`,
+            ) AND NOT EXISTS(SELECT 1 FROM hosted_servers hs WHERE hs.server_id = ? AND hs.funding = 'organization'
+              AND (hs.funding_status != 'active' OR hs.desired_state IN ('stopped','deleted')))`,
             )
             .bind(
               sessionId,
@@ -1574,12 +1591,16 @@ export class RemoteControlPlane {
               authSessionHash,
               userId,
               now,
+              hostId,
             ),
         ]),
       );
       // The insert carries the same live-account-session guard as the read below, so one written row
       // already proves the session may start. Only a row the insert ignored needs the read.
-      if (insert?.meta.changes === 1) return { sessionId, hostId, expiresAt };
+      if (insert?.meta.changes === 1) {
+        yield* this.#requireHostedFunding(hostId);
+        return { sessionId, hostId, expiresAt };
+      }
       const active = yield* remoteCall(() =>
         dependencies.database
           .prepare(
@@ -1597,6 +1618,7 @@ export class RemoteControlPlane {
       );
       if (!active)
         return yield* new RemoteControlPlaneError(401, "auth_session_revoked", "The account session has ended.");
+      yield* this.#requireHostedFunding(hostId);
       return { sessionId: active.session_id, hostId, expiresAt: active.expires_at };
     },
     (operation) => operation.pipe(Effect.provide(this.#layer)),
@@ -1798,7 +1820,8 @@ export class RemoteControlPlane {
       if (!session || session.ended_at || session.expires_at <= now || session.status !== "active") {
         return yield* new RemoteControlPlaneError(403, "session_inactive", "The remote session is not active.");
       }
-      return yield* dependencies.signer.issue({
+      yield* this.#requireHostedFunding(session.host_id);
+      const ticket = yield* dependencies.signer.issue({
         sessionId,
         hostId: session.host_id,
         userId,
@@ -1809,6 +1832,8 @@ export class RemoteControlPlane {
         clientPublicKey: boundClientPublicKey,
         now,
       });
+      yield* this.#requireHostedFunding(session.host_id);
+      return ticket;
     },
     (operation) => operation.pipe(Effect.provide(this.#layer)),
   ).bind(this);
@@ -1944,7 +1969,7 @@ export class RemoteControlPlane {
     function* (this: RemoteControlPlane, hostId: string, machineToken: string) {
       const dependencies = yield* RemoteDependencies;
       const host = yield* this.authenticateHost(hostId, machineToken);
-      return yield* dependencies.signer.issue({
+      const ticket = yield* dependencies.signer.issue({
         sessionId: `host-${hostId}`,
         hostId,
         userId: host.owner_user_id,
@@ -1954,6 +1979,8 @@ export class RemoteControlPlane {
         sessionExpiresAt: PERSISTENT_SESSION_EXPIRES_AT,
         now: dependencies.now(),
       });
+      yield* this.#requireHostedFunding(hostId);
+      return ticket;
     },
     (operation) => operation.pipe(Effect.provide(this.#layer)),
   ).bind(this);
@@ -2652,6 +2679,7 @@ export class RemoteControlPlane {
       if (!host || !expected || difference !== 0) {
         return yield* new RemoteControlPlaneError(401, "host_unauthorized", "The host credential is invalid.");
       }
+      yield* this.#requireHostedFunding(hostId);
       return host;
     },
     (operation) => operation.pipe(Effect.provide(this.#layer)),
@@ -2899,6 +2927,28 @@ export class RemoteControlPlane {
     if (reservation && (reservation.owner_user_id !== userId || reservation.desired_state === "deleted")) {
       return yield* new RemoteControlPlaneError(403, "host_owner_mismatch", "This host belongs to another account.");
     }
+    yield* this.#requireHostedFunding(hostId);
+  });
+
+  readonly #requireHostedFunding = Effect.fn("RemoteControlPlane.requireHostedFunding")(function* (
+    hostId: string,
+  ): Effect.fn.Return<void, RemoteFailure, RemoteDependencies> {
+    const dependencies = yield* RemoteDependencies;
+    const blocked = yield* remoteCall(() =>
+      dependencies.database
+        .prepare(
+          `SELECT 1 AS blocked FROM hosted_servers WHERE server_id = ? AND funding = 'organization'
+       AND (funding_status != 'active' OR desired_state IN ('stopped','deleted'))`,
+        )
+        .bind(hostId)
+        .first<{ blocked: number }>(),
+    );
+    if (blocked)
+      return yield* new RemoteControlPlaneError(
+        403,
+        "hosted_funding_revoked",
+        sourceText("error.billing.fundingRevoked"),
+      );
   });
 
   /** The latest key handovers of each host that `condition` selects, the earliest step first. */

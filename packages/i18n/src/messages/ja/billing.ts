@@ -4,7 +4,7 @@ import type { messages as source } from "../en/billing";
 export const messages = {
   // The Billing tab in Settings and the Billing dialog in the web client.
   "billing.title": "お支払い",
-  "billing.description": "サーバーごとにプランがあります。お支払いは Stripe が処理します。",
+  "billing.description": "サーバーのプランと組織による費用負担を確認できます。",
   "billing.loading": "お支払い情報を読み込んでいます…",
   "billing.unavailable": "このアカウントサーバーではお支払いを利用できません。",
   "billing.loadFailed": "お支払い情報を読み込めませんでした。",

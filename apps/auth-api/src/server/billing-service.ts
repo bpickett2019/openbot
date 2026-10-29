@@ -302,6 +302,7 @@ export class BillingService {
       request: CheckoutRequest,
     ): Effect.fn.Return<{ sessionId: string; url: string }, BillingError | BillingOperationError, BillingDependencies> {
       const dependencies = yield* BillingDependencies;
+      yield* this.#requireStripeFunding(request.serverId);
       const price = (yield* this.#prices()).get(billingLookupKey(request.plan, request.interval));
       const amount = priceAmount(price, request.currency);
       if (!price || amount === null) return yield* plansUnavailable();
@@ -442,6 +443,7 @@ export class BillingService {
       serverId: string,
     ): Effect.fn.Return<void, BillingError | BillingOperationError, BillingDependencies> {
       const dependencies = yield* BillingDependencies;
+      yield* this.#requireStripeFunding(serverId);
       const rows = yield* billingCall(() =>
         dependencies.database
           .prepare(
@@ -469,6 +471,7 @@ export class BillingService {
       BillingDependencies
     > {
       const dependencies = yield* BillingDependencies;
+      yield* this.#requireStripeFunding(serverId);
       const rows = yield* billingCall(() =>
         dependencies.database
           .prepare(
@@ -537,6 +540,9 @@ export class BillingService {
       subscriptionId: string,
     ): Effect.fn.Return<void, BillingError | BillingOperationError, BillingDependencies> {
       const dependencies = yield* BillingDependencies;
+      if (yield* this.#organizationSubscription(subscriptionId)) {
+        return yield* new BillingError(409, "organization_funded", sourceText("error.billing.organizationManaged"));
+      }
       const stored = yield* billingCall(() =>
         dependencies.database
           .prepare(
@@ -668,6 +674,9 @@ export class BillingService {
           .first<{ owned: number }>(),
       );
       if (!owned) return yield* new BillingError(404, "no_subscription", "This plan does not exist.");
+      if (yield* this.#organizationSubscription(request.subscriptionId)) {
+        return yield* new BillingError(409, "organization_funded", sourceText("error.billing.organizationManaged"));
+      }
       const type = request.flow === "update" ? "subscription_update" : "subscription_cancel";
       return yield* this.#stripeCall(() =>
         dependencies.stripe.createPortalSession({
@@ -816,6 +825,13 @@ export class BillingService {
     // The time of the read, not of the write: a read that started later holds the newer state.
     const readAt = dependencies.now();
     const subscription = yield* this.#stripeCall(() => dependencies.stripe.getSubscription(subscriptionId));
+    const metadataServerId = subscription.metadata[BILLING_METADATA.serverId];
+    const serverId = metadataServerId && SERVER_ID_PATTERN.test(metadataServerId) ? metadataServerId : null;
+    if (
+      (serverId && (yield* this.#organizationFunded(serverId))) ||
+      (yield* this.#organizationSubscription(subscriptionId))
+    )
+      return null;
     const customerId = subscriptionCustomerId(subscription);
     const price = subscription.items.data[0]?.price;
     if (price && isLicensePrice(price)) {
@@ -833,8 +849,6 @@ export class BillingService {
     }
     const ownerId = yield* this.#subscriptionOwner(subscription, customerId);
     if (!ownerId) return null;
-    const metadataServerId = subscription.metadata[BILLING_METADATA.serverId];
-    const serverId = metadataServerId && SERVER_ID_PATTERN.test(metadataServerId) ? metadataServerId : null;
     const previous = yield* billingCall(() =>
       dependencies.database
         .prepare(
@@ -991,6 +1005,46 @@ export class BillingService {
       ...(action === "plan_ended" ? { endReason: planEndReason(previous) } : {}),
     });
   }
+
+  readonly #organizationFunded = Effect.fn("BillingService.organizationFunded")(function* (
+    this: BillingService,
+    serverId: string,
+  ): Effect.fn.Return<boolean, BillingError | BillingOperationError, BillingDependencies> {
+    const dependencies = yield* BillingDependencies;
+    const row = yield* billingCall(() =>
+      dependencies.database
+        .prepare("SELECT 1 AS found FROM hosted_servers WHERE server_id = ? AND funding = 'organization'")
+        .bind(serverId)
+        .first<{ found: number }>(),
+    );
+    return row !== null;
+  });
+
+  readonly #organizationSubscription = Effect.fn("BillingService.organizationSubscription")(function* (
+    this: BillingService,
+    subscriptionId: string,
+  ): Effect.fn.Return<boolean, BillingError | BillingOperationError, BillingDependencies> {
+    const dependencies = yield* BillingDependencies;
+    const row = yield* billingCall(() =>
+      dependencies.database
+        .prepare(
+          `SELECT 1 AS found FROM billing_subscriptions s JOIN hosted_servers hs ON hs.server_id = s.server_id
+           WHERE s.stripe_subscription_id = ? AND hs.funding = 'organization'`,
+        )
+        .bind(subscriptionId)
+        .first<{ found: number }>(),
+    );
+    return row !== null;
+  });
+
+  readonly #requireStripeFunding = Effect.fn("BillingService.requireStripeFunding")(function* (
+    this: BillingService,
+    serverId: string,
+  ): Effect.fn.Return<void, BillingError | BillingOperationError, BillingDependencies> {
+    if (yield* this.#organizationFunded(serverId)) {
+      return yield* new BillingError(409, "organization_funded", sourceText("error.billing.organizationManaged"));
+    }
+  });
 
   readonly #prices = Effect.fn("BillingService.prices")(function* (
     this: BillingService,

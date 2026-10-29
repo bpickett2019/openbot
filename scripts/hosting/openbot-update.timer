@@ -1,5 +1,4 @@
-# A hosted server runs only while it is in use, so the first check comes soon after each start. The
-# delay counts from the start of the timer: boat resumes a server on a machine that booted before.
+# Check shortly after the system-server timer starts, then at regular intervals.
 [Unit]
 Description=Check for an OpenBot update
 

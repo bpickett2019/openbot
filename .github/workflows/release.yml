@@ -38,7 +38,7 @@ jobs:
     name: Validate release tag
     # Gating the one job every build and the publish depend on keeps a host signing run off the
     # release path entirely, rather than relying on each of them to opt out.
-    if: github.event_name == 'push' || inputs.mode == 'dry-run'
+    if: github.repository == 'bpickett2019/openbot' && (github.event_name == 'push' || inputs.mode == 'dry-run')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -74,6 +74,7 @@ jobs:
         shell: bash
         env:
           DISCORD_RELEASE_ROLE_ID: ${{ vars.DISCORD_RELEASE_ROLE_ID }}
+          DISCORD_RELEASE_ENABLED: ${{ vars.DISCORD_RELEASE_ENABLED }}
         run: |
           package_version="$(bun -p 'require("./package.json").version')"
           tag_version="${GITHUB_REF_NAME#v}"
@@ -82,33 +83,37 @@ jobs:
             exit 1
           fi
           bun scripts/check-release-notes.ts
-          # The `discord-announce` job of a tag push needs the role, so stop before the release.
-          if [[ "$GITHUB_EVENT_NAME" == "push" && -z "$DISCORD_RELEASE_ROLE_ID" ]]; then
-            echo "DISCORD_RELEASE_ROLE_ID is not set. See docs/RELEASING.md#discord-announcement." >&2
-            exit 1
+          if [[ "$DISCORD_RELEASE_ENABLED" == "true" ]]; then
+            test -n "$DISCORD_RELEASE_ROLE_ID"
+            bun scripts/discord-release-announcement.ts check "$package_version"
           fi
-          bun scripts/discord-release-announcement.ts check "$package_version"
           echo "version=$package_version" >> "$GITHUB_OUTPUT"
           echo "tag=v$package_version" >> "$GITHUB_OUTPUT"
 
       - name: Require deployed Universal Links support
         shell: bash
+        env:
+          BROWSER_APP_ORIGIN: ${{ vars.BROWSER_APP_ORIGIN }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+          [[ "$BROWSER_APP_ORIGIN" =~ ^https://[^/?#[:space:]]+$ ]] || { echo "Set the fork BROWSER_APP_ORIGIN." >&2; exit 1; }
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "Set the fork APPLE_TEAM_ID." >&2; exit 1; }
           verification_dir="$(mktemp -d)"
           trap 'rm -rf "$verification_dir"' EXIT
           join_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
             --max-redirs 0 --dump-header "$verification_dir/join.headers" \
             --output "$verification_dir/join.html" --write-out '%{http_code}' \
-            https://openbot.run/join)"
+            "$BROWSER_APP_ORIGIN/join")"
           test "$join_status" = "200"
           tr -d '\r' < "$verification_dir/join.headers" | grep -Eiq '^cache-control:.*no-store'
           association_status="$(curl --silent --show-error --retry 5 --retry-all-errors \
             --max-redirs 0 --dump-header "$verification_dir/association.headers" \
             --output "$verification_dir/association.json" --write-out '%{http_code}' \
-            https://openbot.run/.well-known/apple-app-site-association)"
+            "$BROWSER_APP_ORIGIN/.well-known/apple-app-site-association")"
           test "$association_status" = "200"
           tr -d '\r' < "$verification_dir/association.headers" | grep -Eiq '^content-type: application/json'
-          jq -e '.applinks.details == [{"appID":"ZTRDTUL87R.app.openbot.desktop","paths":["/join"]},{"appID":"ZTRDTUL87R.run.openbot.mobile","paths":["/join","/agents/*"]}]' \
+          jq -e --arg team "$APPLE_TEAM_ID" '.applinks.details == [{"appID":($team + ".app.openbot.desktop"),"paths":["/join"]},{"appID":($team + ".run.openbot.mobile"),"paths":["/join","/agents/*"]}]' \
             "$verification_dir/association.json" >/dev/null
 
   host-signing:
@@ -951,7 +956,7 @@ jobs:
         run: |
           set -euo pipefail
           trap 'docker logs openbot' ERR
-          docker run --detach --name openbot --shm-size 1g \
+          docker run --detach --name openbot --shm-size 1g --cap-drop ALL \
             --security-opt seccomp=docker/seccomp.json --security-opt no-new-privileges:true openbot:release
           # The socket opens before the account state loads, so wait for that state too.
           status=
@@ -1045,6 +1050,17 @@ jobs:
           name: release-linux-arm64
           path: release-assets/linux-arm64
 
+      - name: Package the managed host bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p host-bootstrap release-assets/host-bootstrap
+          install -m 0755 scripts/hosting/openbot-digitalocean-bootstrap scripts/hosting/provision-digitalocean-image.sh host-bootstrap/
+          install -m 0644 scripts/hosting/openbot-managed.service docker/seccomp.json host-bootstrap/
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            -czf "release-assets/host-bootstrap/OpenBot-Host-Bootstrap-$RELEASE_TAG.tar.gz" -C host-bootstrap .
+          (cd release-assets/host-bootstrap && sha256sum *.tar.gz > SHA256SUMS-host-bootstrap.txt)
+
       - name: Generate combined checksums
         shell: bash
         run: |
@@ -1053,6 +1069,7 @@ jobs:
             release-assets/windows/SHA256SUMS-windows.txt \
             release-assets/linux/SHA256SUMS-linux.txt \
             release-assets/linux-arm64/SHA256SUMS-linux-arm64.txt \
+            release-assets/host-bootstrap/SHA256SUMS-host-bootstrap.txt \
             > release-assets/SHA256SUMS.txt
 
       # Only this step gets the write token: the steps before it run dependency code.
@@ -1062,7 +1079,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          artifacts=(release-assets/macos/* release-assets/macos-x64/* release-assets/latest-mac.yml release-assets/windows/* release-assets/linux/* release-assets/linux-arm64/* release-assets/SHA256SUMS.txt)
+          artifacts=(release-assets/macos/* release-assets/macos-x64/* release-assets/latest-mac.yml release-assets/windows/* release-assets/linux/* release-assets/linux-arm64/* release-assets/host-bootstrap/* release-assets/SHA256SUMS.txt)
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${artifacts[@]}" --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$RELEASE_TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"
@@ -1077,13 +1094,13 @@ jobs:
 
   # Posts the highlights of `.github/release-announcement.json`, which the `validate` job checked, as
   # OpenBot through a channel webhook (docs/RELEASING.md#discord-announcement). It waits for the
-  # Docker image and the boat snapshot, so the post says "is out" only when every channel has the
+  # Docker image, so the post says "is out" only when every release artifact has the
   # version. A failure here does not undo the release: re-run this job. A re-run after a success
   # posts the message again.
   discord-announce:
     name: Announce the release on Discord
-    needs: [validate, publish, docker-publish, hosted-release]
-    if: github.event_name == 'push'
+    needs: [validate, publish, docker-publish]
+    if: github.event_name == 'push' && vars.DISCORD_RELEASE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: release
@@ -1107,40 +1124,6 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
         run: bun scripts/discord-release-announcement.ts send "$RELEASE_VERSION"
 
-  hosted-release:
-    name: Publish boat server snapshot
-    needs: [validate, publish]
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    environment: cloudflare-production
-    permissions:
-      contents: read
-    # The same lock as the production Worker deploy. Keep every pending release.
-    concurrency:
-      group: cloudflare-production-worker
-      cancel-in-progress: false
-      queue: max
-    steps:
-      - name: Check out tagged source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Bun
-        uses: ./.github/actions/setup-bun
-        with:
-          install: ignore-scripts
-
-      - name: Build and select production snapshot
-        env:
-          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
-          GH_TOKEN: ${{ github.token }}
-          BOAT_TEMPLATE_API_KEY: ${{ secrets.BOAT_TEMPLATE_API_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_DEPLOY_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: bash scripts/hosting/release-boat-template.sh
-
   # Pushes the images that the `docker` job checked, after the GitHub Release exists, so `latest` on
   # GHCR never names a release that did not publish. It runs no build code: it only loads, tags and
   # pushes. Each architecture also keeps its own tag; the release tags name an index of both.
@@ -1155,7 +1138,7 @@ jobs:
       id-token: write
       packages: write
     env:
-      IMAGE: ghcr.io/${{ github.repository }}
+      IMAGE: ghcr.io/bpickett2019/openbot
       RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
     steps:
       - name: Download the amd64 image

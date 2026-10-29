@@ -405,6 +405,11 @@ export const messages = {
   "settings.hostedServers.description": "每个服务器都有独立的助手、文件和自动化任务。",
   "settings.hostedServers.add": "添加服务器",
   "settings.hostedServers.planSpec": "{plan} · {vcpu} 核 vCPU、{memory} GB 内存、{disk} GB 存储",
+  "settings.hostedServers.organizationFunded": "组织出资",
+  "settings.hostedServers.organizationSpec":
+    "{provider} · {vcpu} 核 vCPU、{memory} GB 内存、{disk} GB 持久存储 · {region}",
+  "settings.hostedServers.administratorStopped": "由管理员停用",
+  "settings.hostedServers.fundingRevokedDescription": "组织资助未启用。请让管理员恢复资助后再启动该服务器。",
   "settings.hostedServers.creating": "正在创建…",
   "settings.hostedServers.usageNote":
     "服务器在最后一次消息或改动约 15 分钟后停止，即使应用还开着。在应用中按键或点击、收到消息，或有自动化任务按计划运行时，它会重新启动。这台电脑关机时，它的助手和自动化任务照常工作。",

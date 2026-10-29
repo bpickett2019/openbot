@@ -28,6 +28,17 @@
 
 .hosted-servers-list .ui-item-title {
   gap: var(--openbot-space-2);
+  flex-wrap: wrap;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.hosted-servers-list .ui-item-description {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .hosted-servers-actions {

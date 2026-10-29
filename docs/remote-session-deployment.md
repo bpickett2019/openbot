@@ -1,110 +1,61 @@
-# Concurrent remote sessions: issue #325
+# Cloudflare Signal deployment and session acceptance
 
-## Read-only production evidence
+Signal uses the existing Bun service behind one fixed-identity Cloudflare Container. TURN is Cloudflare Realtime, not a colocated coturn process. Accounts/web and Signal have separate ownership and deployments. The desktop's durable volume is a separate hosting concern.
 
-Checked on 2026-09-08. No production changes were made for this investigation.
+## Approval and inputs
 
-- SSH target: `sui-alexandria`. Compose directory: `/opt/openbot/remote`.
-- Signal container: `openbot-remote-remote-api-1`, created `2026-09-01T10:53:29.873613544Z`.
-- Running image: `sha256:7f94a50aee8b89ccf16803c0b9811f6fe19a5d876d14cfeed51deb97e4eee6dd`.
-- Running `signal-service.ts` SHA-256: `b1514f74e6b2ff708c430154b793261a667b5b107c69ee6bd79e6c0fd2356efc`.
-  Its client admission code rejects every different session when a host already has a connection.
-  Its protocol parser has no `multiplex` field. This confirms that this image lacks multiplex support.
-- Latest Worker version observed: `bf613b5c-8c44-4c73-8226-1c2651bab5c7`, version number 265,
-  created `2026-09-08T09:16:13.382129Z`, deployed at 100% at `2026-09-08T09:16:14.464933Z`.
-  This is version evidence, not an end-to-end compatibility result.
-- D1 records `0018_remote_device_sessions.sql` as applied at `2026-09-04 12:21:44`.
-  The SELECT changed no data. Do not apply this migration again or reverse it.
-- `/opt/openbot` is not a Git checkout. The public Signal health routes do not identify the source version.
+Deployment, image upload and runtime are external changes. Confirm the owned Cloudflare account, source, allowance and cleanup deadline before making them. A proof allowance does not authorize ongoing production operation or release publication. Do not use upstream encrypted environments, resource IDs or domains.
 
-To repeat the read-only checks, run from this repository:
+Use `remote/cloudflare/wrangler.jsonc`. It declares one `lite` instance with default scheduling, a fixed Durable Object owner, disabled startup and no observability logs. Required Worker bindings are listed in [Remote production requirements](../remote/README.md#production-requirements):
 
-```sh
-ssh sui-alexandria 'docker inspect openbot-remote-remote-api-1 --format "{{.Image}} {{.Created}}"'
-ssh sui-alexandria 'docker exec openbot-remote-remote-api-1 sha256sum /app/remote/api/src/signal-service.ts'
-bunx wrangler deployments list --cwd apps/auth-api --json
-bunx wrangler d1 execute openbot-auth --cwd apps/auth-api --remote \
-  --command "SELECT name, applied_at FROM d1_migrations WHERE name = '0018_remote_device_sessions.sql'" --json
-```
+- Owned account HTTPS origin in `REMOTE_CONTROL_PLANE_URL`.
+- Actual public Signal HTTPS origin in `REMOTE_SIGNAL_ORIGIN`.
+- `REMOTE_SESSION_SECRET` and the account's matching `REMOTE_AUTH_WEBHOOK_SECRET`, each at least 32 bytes.
+- Owned `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`.
+- Optional `REMOTE_BROWSER_ORIGIN` only when the browser's exact HTTPS origin differs from the direct account origin. This replaces, rather than broadens, the browser allowlist. JWKS and signed account calls still use the direct account origin.
 
-## Deployment procedure — requires separate approval
+Optional connectors need their own credential groups. Compare binding names and status without printing values. The Realtime issuer token must never reach a desktop, renderer, log, URL, or test report.
 
-Commit and check the intended source before deployment. Use the approved commit as `HEAD` below.
-Run the required CI checks first. If the target environment lacks the device-session schema or Worker,
-apply the compatible additive D1 migrations before deploying the Worker. Use the existing production
-CI deployment procedure. Do not infer Worker compatibility from its date alone.
+## Deployment
 
-Stage the approved source on the host without replacing its configuration or key files:
+1. Run focused source checks and the real local HTTP/WebSocket smoke with synthetic credentials:
 
-```sh
-release_dir="/opt/openbot/releases/$(git rev-parse HEAD)"
-ssh sui-alexandria "mkdir -p '$release_dir'"
-git archive HEAD | ssh sui-alexandria "tar --exclude='.env*' --exclude='*/.env*' -x -C '$release_dir'"
-ssh sui-alexandria "ln -s /opt/openbot/remote/.env.production '$release_dir/remote/.env.production'"
-ssh sui-alexandria "ln -s /opt/openbot/runtime '$release_dir/runtime'"
-ssh sui-alexandria "ln -s /opt/openbot/node_modules '$release_dir/node_modules'"
-ssh sui-alexandria "ln -s /opt/openbot/remote/.env.keys '$release_dir/remote/.env.keys'"
-```
+   ```sh
+   bun run --cwd remote/api typecheck
+   bun run test:signal
+   bun remote/scripts/check.ts --compose
+   node --check remote/cloudflare/worker.js
+   ```
 
-The runtime and dependency links let the existing Dotenvx wrapper run. Docker installs Signal
-dependencies from the approved lockfile inside the image.
+2. Use the operator's Wrangler login and explicitly set `CLOUDFLARE_ACCOUNT_ID`. Check the target identity. Configure owned Worker secret bindings through Wrangler stdin or the provider's secure interface.
+3. Deploy the intended source disabled:
 
-On `sui-alexandria`, change to that release directory. Retain the running image **before** the build.
-Run only these Signal commands; `remote:update` also updates coturn and is not appropriate here.
+   ```sh
+   bun run remote:update --deploy
+   ```
 
-```sh
-signal_previous_image=$(docker inspect openbot-remote-remote-api-1 --format '{{.Image}}')
-docker image tag "$signal_previous_image" openbot-remote-api:before-325
-# The release directory is named after the commit. `/health/live` shows it after the start.
-source_commit=$(basename "$PWD")
-printf '%s\n' "$source_commit" | grep -Eqx '[0-9a-f]{40}' || { echo "Not in a release directory." >&2; exit 1; }
-remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- \
-  docker compose -p openbot-remote -f remote/compose.yaml build --build-arg "OPENBOT_SOURCE_COMMIT=$source_commit" remote-api
-remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- \
-  docker compose -p openbot-remote -f remote/compose.yaml up -d --no-build --no-deps remote-api
-docker inspect openbot-remote-remote-api-1 --format '{{.Image}} {{.State.Health.Status}}'
-curl --fail --silent --show-error https://signal.openbot.run/health/ready
-curl --fail --silent --show-error https://signal.openbot.run/health/live
-```
+   The wrapper does not load encrypted files or provision TURN credentials. It discards inherited production token/environment selection. Inspect the actual returned Worker URL and image/deployment IDs; do not infer success from a requested name.
+4. Set account `REMOTE_SIGNAL_URL` to the actual `wss://<signal-host>/v1/signal`. Its deployment derives `REMOTE_AUTH_WEBHOOK_URL` as `https://<signal-host>/internal/auth-events`. Deploy compatible account routes/schema before enabling Signal.
+5. Only within the approved runtime allowance, deploy with `--deploy --enable`. Check the real `/health/live` and `/health/ready` endpoints. Record source and provider image/deployment identity; an unknown health commit is not source proof.
 
-`/health/live` must show the release commit. Builds made before this field existed show no `commit`;
-builds made without `OPENBOT_SOURCE_COMMIT` show `unknown`.
+Every client reaches one in-memory Signal owner. Public requests must use the configured HTTPS origin; private Container traffic is HTTP. Forwarding identity is set by the Worker. Browser origins are exact, the released desktop origin is retained, and native peers without Origin are allowed.
 
-Wait for Docker health to become `healthy`. Check the running source for `multiplex` and record its
-checksum. Keep the previous image until the device checks below pass. Do not print container environment
-variables, resume tokens, tickets, or raw connection logs.
+## Required transport and access acceptance
 
-Signal replacement closes signaling WebSockets. Existing WebRTC data channels should continue while
-signaling reconnects. The first resume after a restart checks the durable control plane. When the
-account service does not answer, Signal closes the socket with 1013 and no error frame, and the peer
-connects again after its backoff; the session does not end. Coturn stays
-running, so the update does not deliberately end its relay allocations. Validate this with an active
-connection; health checks alone do not prove it.
+Health and compilation are insufficient. Record actual client/host versions, account deployment, D1 migrations and Signal image before running:
 
-If the new Signal fails, restore the retained image from the same release directory:
+1. Normal owner sign-in and staff invitation; unrelated and removed members are denied.
+2. Two independent device sessions connected to the same host. Disconnect/revoke one without ending the other.
+3. Direct WebRTC and a relay-only connection using real Cloudflare Realtime credentials. Confirm the selected ICE path, not merely receipt of an ICE array.
+4. Refresh/reconnect reuse and session-bounded credential expiry. No issuer credential may appear in traffic or logs.
+5. Funding/session revocation while credential issuance is pending. Access must be denied before provider cleanup; a failed revocation stays retryable in the account outbox.
+6. Approved Signal replacement during active direct and relay traffic. Observe channel continuity, socket reconnect, account revalidation and file-transfer resumption. Do not assume an existing allocation survives or terminates.
+7. Disabled-service and issuer-failure behavior; no empty-ICE, upstream-service or authentication fallback.
 
-```sh
-docker image tag openbot-remote-api:before-325 openbot-remote-remote-api
-remote/bin/dotenvx run --overload -f remote/.env.production -fk remote/.env.keys -- \
-  docker compose -p openbot-remote -f remote/compose.yaml up -d --no-build --no-deps --force-recreate remote-api
-```
+The credential ledger is process-owned. Known credentials are revoked, including late mint responses. Credentials lost with a process or an uncertain provider response can only expire by their bounded TTL. This implementation does not establish immediate termination of every existing TURN allocation.
 
-Rollback restores the old one-session limit. It does not reverse D1 migrations or revoke device sessions.
+## Stop, recovery and cleanup
 
-## Required device validation — pending
+Deploy without `--enable` to deny new requests and let the existing alarm stop the service. Verify provider runtime state; a local command's success is not proof that billing stopped. A bounded proof must also remove its temporary Worker/Container application, artifacts and credentials as required by its allowance. Preserve unrelated resources and record any billable item left behind.
 
-Use a current desktop B as host, desktop A as a client, and a mobile client from a compatible source.
-Record their versions, the Worker version, the D1 migration result, and the Signal image.
-
-1. Connect mobile to A, accept B's Member invitation on mobile, then open B on A.
-2. Repeat with A joining B before mobile opens B. Both clients must load B's agents and data.
-3. Stop A. Mobile must remain connected to B. Repeat with a disconnect of one device session.
-4. Reconnect A and verify that its agent list and data refresh. Switch servers during a pending load;
-   the old response must not replace the selected server's data.
-5. With an older host that omits `multiplex`, connect a second client. It must show a connection error
-   and Retry, while the first client remains connected. Retry must retain the error until success.
-6. During the approved Signal replacement, check that active data channels survive and that both
-   clients can resume signaling. Test a relay connection as well as a direct connection.
-
-Do not close issue #325 until these checks pass. PR #324 remains separate; its invitation UI changes
-are not included here. No automatic Signal deployment is added.
+For a failed rollout, disable operation first. Restore only an approved, compatible known image/source with the same fixed identity and bindings. Do not reverse D1 migrations or deploy the removed coturn/Compose stack as a fallback. Re-run affected transport/access checks before restoring service. No deployment or rollback is automatic from this document.

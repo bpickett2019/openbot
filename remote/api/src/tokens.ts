@@ -38,13 +38,8 @@ import {
 } from "jose";
 import { z } from "zod";
 import type { RemoteApiConfig } from "./config";
-import {
-  type IceServer,
-  REMOTE_TICKET_AUDIENCE,
-  REMOTE_TICKET_PROTOCOL_VERSION,
-  type RemoteTicketClaims,
-  SIGNAL_TURN_CREDENTIAL_TTL_SECONDS,
-} from "./protocol";
+import { REMOTE_TICKET_AUDIENCE, REMOTE_TICKET_PROTOCOL_VERSION, type RemoteTicketClaims } from "./protocol";
+import { RealtimeTurn } from "./turn";
 
 // The resume token is this service's own, minted and verified here and never seen by the account
 // API, so its audience stays local while the ticket's comes from the shared contract.
@@ -134,10 +129,7 @@ export class RemoteTokenService {
   readonly #ticketKey: JWTVerifyGetKey;
   readonly #remoteTicketKey: RemoteJWKSet | null;
   readonly #sessionSecret: Uint8Array;
-  readonly #turnSecret: string;
-  readonly #turnHost: string;
-  readonly #turnPort: number;
-  readonly #turnTlsPort: number;
+  readonly #turn: RealtimeTurn;
   readonly #validateResumeClaims: (claims: RemoteTicketClaims) => Effect.Effect<boolean, RemoteTokenUnavailableError>;
   readonly #validateSlackRoute: (hostId: string, teams: SlackRouteTeam[]) => Effect.Effect<string[], RemoteTokenError>;
   readonly #validateTelegramRoute: (
@@ -160,10 +152,7 @@ export class RemoteTokenService {
   >();
 
   constructor(
-    config: Pick<
-      RemoteApiConfig,
-      "ticketJwks" | "ticketJwksUrl" | "sessionSecret" | "turnSecret" | "turnHost" | "turnPort" | "turnTlsPort"
-    >,
+    config: Pick<RemoteApiConfig, "ticketJwks" | "ticketJwksUrl" | "sessionSecret" | "turn">,
     validateResumeClaims: (claims: RemoteTicketClaims) => Effect.Effect<boolean, RemoteTokenUnavailableError> = () =>
       Effect.succeed(false),
     options: {
@@ -199,10 +188,7 @@ export class RemoteTokenService {
       this.#ticketKey = remoteTicketKey;
     }
     this.#sessionSecret = new TextEncoder().encode(config.sessionSecret);
-    this.#turnSecret = config.turnSecret;
-    this.#turnHost = config.turnHost;
-    this.#turnPort = config.turnPort;
-    this.#turnTlsPort = config.turnTlsPort;
+    this.#turn = new RealtimeTurn(config.turn);
     this.#validateResumeClaims = validateResumeClaims;
     this.#validateSlackRoute = options.validateSlackRoute ?? (() => Effect.succeed([]));
     this.#validateTelegramRoute = options.validateTelegramRoute ?? (() => Effect.succeed([]));
@@ -386,17 +372,23 @@ export class RemoteTokenService {
       }),
   );
 
-  revokeHost(hostId: string, authEpoch: number): void {
-    for (const [jti, token] of this.#trustedResumeTokens) {
-      if (token.hostId === hostId && token.authEpoch < authEpoch) this.#trustedResumeTokens.delete(jti);
-    }
-  }
+  readonly revokeHost = Effect.fn("RemoteTokens.revokeHost")((hostId: string, authEpoch: number) =>
+    Effect.gen({ self: this }, function* () {
+      for (const [jti, token] of this.#trustedResumeTokens) {
+        if (token.hostId === hostId && token.authEpoch < authEpoch) this.#trustedResumeTokens.delete(jti);
+      }
+      yield* this.#turn.revokeHost(hostId, authEpoch);
+    }),
+  );
 
-  revokeSession(sessionId: string): void {
-    for (const [jti, token] of this.#trustedResumeTokens) {
-      if (token.sessionId === sessionId) this.#trustedResumeTokens.delete(jti);
-    }
-  }
+  readonly revokeSession = Effect.fn("RemoteTokens.revokeSession")((sessionId: string) =>
+    Effect.gen({ self: this }, function* () {
+      for (const [jti, token] of this.#trustedResumeTokens) {
+        if (token.sessionId === sessionId) this.#trustedResumeTokens.delete(jti);
+      }
+      yield* this.#turn.revokeSession(sessionId);
+    }),
+  );
 
   #trustResumeToken(claims: RemoteTicketClaims): void {
     this.#pruneTrustedResumeTokens();
@@ -441,24 +433,9 @@ export class RemoteTokenService {
     }),
   );
 
-  iceServers(claims: RemoteTicketClaims, nowSeconds = Math.floor(Date.now() / 1_000)): IceServer[] {
-    const expiration = Math.min(claims.sessionExpiresAt, nowSeconds + SIGNAL_TURN_CREDENTIAL_TTL_SECONDS);
-    if (expiration <= nowSeconds) throw new Error("The remote session has expired.");
-    const username = `${expiration}:${claims.sessionId}`;
-    const credential = createHmac("sha1", this.#turnSecret).update(username).digest("base64");
-    return [
-      { urls: `stun:${this.#turnHost}:${this.#turnPort}` },
-      {
-        urls: [
-          `turn:${this.#turnHost}:${this.#turnPort}?transport=udp`,
-          `turn:${this.#turnHost}:${this.#turnPort}?transport=tcp`,
-          `turns:${this.#turnHost}:${this.#turnTlsPort}?transport=tcp`,
-        ],
-        username,
-        credential,
-      },
-    ];
-  }
+  readonly iceServers = Effect.fn("RemoteTokens.iceServers")((claims: RemoteTicketClaims) =>
+    this.#turn.iceServers(claims),
+  );
 }
 
 /**

@@ -11,8 +11,11 @@ To run it in a container, see [Docker](docker.md).
 
 On Ubuntu 24.04 or 26.04 (x86_64 or arm64) with systemd:
 
+These commands require an approved, published fork release. An unpublished source checkout is not
+an installable server release.
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nightly-labs/openbot/main/scripts/install-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/bpickett2019/openbot/main/scripts/install-server.sh | sudo bash
 sudo openbot login
 ```
 
@@ -114,8 +117,7 @@ limit of the unit in `os.cpus()`. See [agent processes](hosted-servers.md#memory
 
 A self-hosted server gives the agents a virtual display (Xvfb), and computer use reads that display.
 The default size is 1280x800. A [Docker](docker.md#environment) container uses the same setting
-and the same default. A hosted server gives the agents its boat desktop, and this setting does not
-change that desktop.
+and the same default, including the managed cloud container. There is no separate Boat desktop.
 
 The display size does not change the OpenBot browser (`openbot_browser`). Its pages have their own
 size, 1200x800 when no panel shows them, and its clicks go to page elements.
@@ -238,8 +240,8 @@ installs the packages in `packages.txt`, copies the release to `/opt/OpenBot/app
 scripts, the AppArmor profile and the units. It writes `self` to `/opt/OpenBot/hosted/mode` and
 links `/usr/local/bin/openbot`.
 
-With `mode` set to `self`, `openbot-hosted-server` does not wait for a claim or for a boat desktop.
-It starts a D-Bus session with an unlocked keyring, as on a hosted server, and runs OpenBot under
+`openbot-hosted-server` starts an ordinary self-hosted server under a D-Bus session with an
+unlocked keyring, and runs OpenBot under
 Xvfb with `OPENBOT_SERVER=1`. Main (`src/main/server-mode.ts`) then opens the control socket
 `/run/openbot/control.sock` and publishes the host after each sign-in.
 
@@ -250,8 +252,8 @@ its windows on, at 1280x800. Main gives that display to Computer Use, to remote 
 processes, so an agent's screenshot and remote desktop do not show the OpenBot window. See
 [Computer Use and remote desktop](architecture/computer-use.md#agent-display-on-a-server).
 
-Updates work as on a hosted server (see [Updates](hosted-servers.md#updates)): the timer stages a
-new release, and it starts at the next boot, or when an owner, an admin or a permitted member
+The self-hosted systemd timer stages a new fork release, which starts at the next boot or when
+an owner, admin or permitted member
 installs it in Server Settings > Updates. `sudo openbot update` stages, stops the service, applies
 and starts the service again. When a step fails or a signal stops it, the command completes an
 interrupted copy, starts the service, and exits with an error.

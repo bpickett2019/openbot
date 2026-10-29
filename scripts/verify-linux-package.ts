@@ -19,12 +19,13 @@ const launchStepLimitMs = 5 * 60_000;
 /** The scripts that a server installs from a release (`RELEASE_FILES` in scripts/hosting/openbot-hosted-update). */
 const HOSTED_SCRIPTS = [
   "openbot-hosted-server",
-  "openbot-hosted-env",
   "openbot-hosted-update",
   "openbot",
-  "openbot-boat-pre-stop",
   // Not installed on a server: `install-server.sh` runs it from the unpacked release.
   "openbot-server-setup",
+  "openbot-container",
+  "openbot-digitalocean-bootstrap",
+  "provision-digitalocean-image.sh",
 ];
 const HOSTED_UNITS = [
   "openbot.service",

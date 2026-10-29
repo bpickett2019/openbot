@@ -1,5 +1,4 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { HOSTING_DEVELOPER_KEY_HEADER } from "@openbot/contracts/hosted-servers";
 import { isDynamicRecord, isString } from "@openbot/contracts/runtime-values";
 import { Effect } from "effect";
 import { type AccountAnalytics, createAccountAnalytics } from "./account-analytics";
@@ -302,17 +301,15 @@ export function requestRemoteControlPlane(): RemoteControlPlane {
   return new RemoteControlPlane(requireWorkerBindings(env), { schedule });
 }
 
-/** Pass the request when the call checks who can create servers, so its developer key counts. */
-export function requestHostedServerService(request?: Request): HostedServerService {
-  return requestHostedBilling(request?.headers.get(HOSTING_DEVELOPER_KEY_HEADER) ?? null).hosting;
+export function requestHostedServerService(): HostedServerService {
+  return requestHostedBilling().hosting;
 }
 
-function requestHostedBilling(developerKey: string | null = null) {
+function requestHostedBilling() {
   const bindings = requireWorkerBindings(env);
   const remote = new RemoteControlPlane(bindings, { schedule });
   return createHostedBilling(bindings, {
     removeHost: (ownerUserId, hostId) => remote.deleteHost(ownerUserId, hostId),
-    developerKey,
     planChanged: (hostId) => remote.planChanged(hostId),
     schedule,
   });

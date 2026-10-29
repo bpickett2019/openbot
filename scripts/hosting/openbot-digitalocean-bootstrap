@@ -1,0 +1,398 @@
+#!/usr/bin/python3
+"""Root-owned supervisor for one managed OpenBot host and its retained ext4 volume.
+
+install CONFIG consumes explicit initialization and enables the systemd service.
+run CONFIG holds the writer lock until the container exits. No formatting, forced
+attachment, data restore, provider token, or automatic image rollback is supported.
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.parse import urlsplit
+
+CONFIG = Path('/etc/openbot-host/config.json')
+ROOT = Path('/srv/openbot-volume')
+MARKER = ROOT / 'identity.json'
+NETWORK = 'openbot-managed'
+BRIDGE = 'ob-managed0'
+CONTAINER = 'openbot-managed'
+SECCOMP = '/etc/openbot-host/seccomp.json'
+UUID = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+
+
+def require(value, message):
+    if not value:
+        raise RuntimeError(message)
+
+
+def command(*args, check=True):
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, check=False)
+    require(not check or result.returncode == 0, 'Host operation failed: ' + args[0])
+    return result
+
+
+def private_file(path):
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_mode & 0o077 == 0,
+            'Configuration or volume marker is not a private root-owned file.')
+    require(info.st_size <= 16384, 'Configuration or volume marker is too large.')
+
+
+def private_directory(path):
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_mode & 0o022 == 0,
+            'Host directory must be root-owned and not writable by other users.')
+
+
+def save(path, value):
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.openbot-')
+    try:
+        with os.fdopen(descriptor, 'w') as output:
+            if isinstance(value, str):
+                output.write(value)
+            else:
+                json.dump(value, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def configuration():
+    private_directory(CONFIG.parent)
+    private_file(CONFIG)
+    value = json.loads(CONFIG.read_text())
+    keys = {'hostId', 'volumeId', 'volumeName', 'accountOrigin', 'signalUrl',
+            'image', 'version', 'initialize', 'hostedClaim', 'filesystemUuid'}
+    require(isinstance(value, dict) and not value.keys() - keys, 'Unknown host configuration field.')
+    for key in ('hostId', 'volumeId'):
+        require(isinstance(value.get(key), str) and re.fullmatch(UUID, value[key]), 'Invalid host or volume identity.')
+    require(isinstance(value.get('volumeName'), str) and re.fullmatch(r'[a-z][a-z0-9-]{0,63}', value['volumeName']),
+            'Invalid volume name.')
+    require(isinstance(value.get('image'), str) and re.fullmatch(
+        r'ghcr\.io/bpickett2019/openbot@sha256:[0-9a-f]{64}', value['image']), 'A fork image digest is required.')
+    require(isinstance(value.get('version'), str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', value['version']),
+            'A release version is required.')
+    require(type(value.get('initialize')) is bool, 'Explicit initialization mode is required.')
+    claim = value.get('hostedClaim')
+    require(claim is None or (isinstance(claim, str) and re.fullmatch(r'[A-Za-z0-9._~-]{16,4096}', claim)),
+            'Invalid bounded hosted bootstrap claim.')
+    for key, scheme in (('accountOrigin', 'https'), ('signalUrl', 'wss')):
+        require(isinstance(value.get(key), str), 'Missing account or Signal origin.')
+        url = urlsplit(value[key])
+        require(url.scheme == scheme and url.hostname and not url.username and not url.password
+                and not url.query and not url.fragment and '\n' not in value[key] and '\r' not in value[key],
+                'Invalid account or Signal origin.')
+        require(url.path == ('' if key == 'accountOrigin' else '/v1/signal'), 'Invalid account or Signal path.')
+    require(value.get('filesystemUuid') is None or re.fullmatch(UUID, value['filesystemUuid']),
+            'Invalid filesystem UUID.')
+    return value
+
+
+def mount_volume(config):
+    command('udevadm', 'settle', '--timeout=120')
+    device = Path('/dev/disk/by-id/scsi-0DO_Volume_' + config['volumeName'])
+    require(device.exists() and stat.S_ISBLK(device.stat().st_mode), 'Expected DigitalOcean volume is absent.')
+    require(command('blkid', '-s', 'TYPE', '-o', 'value', str(device)).stdout.strip() == 'ext4',
+            'Expected volume is not ext4. This program never formats a disk.')
+    uuid = command('blkid', '-s', 'UUID', '-o', 'value', str(device)).stdout.strip()
+    require(re.fullmatch(UUID, uuid), 'Volume has no filesystem UUID.')
+    require(config.get('filesystemUuid') in (None, uuid), 'External filesystem identity does not match.')
+    ROOT.mkdir(mode=0o700, exist_ok=True)
+    private_directory(ROOT)
+    # DigitalOcean can mount a newly formatted volume under /mnt. Adopt only
+    # this exact device, without lazy/forced unmount or a second writable mount.
+    mounts = command('findmnt', '--json', '--list', '--source', 'UUID=' + uuid,
+                     '--output', 'TARGET,UUID,FSTYPE', check=False)
+    entries = json.loads(mounts.stdout)['filesystems'] if mounts.returncode == 0 else []
+    require(len(entries) <= 1, 'The volume has more than one mount. Stop all writers first.')
+    if entries and entries[0]['target'] != str(ROOT):
+        entry = entries[0]
+        previous = Path(entry['target'])
+        require(entry['uuid'] == uuid and entry['fstype'] == 'ext4'
+                and previous.parent == Path('/mnt'), 'Unexpected existing volume mount.')
+        private_directory(previous)
+        previous_marker = previous / 'identity.json'
+        if previous_marker.exists():
+            private_file(previous_marker)
+            identity = json.loads(previous_marker.read_text())
+            require(identity.get('hostId') == config['hostId']
+                    and identity.get('volumeId') == config['volumeId']
+                    and identity.get('filesystemUuid') == uuid, 'Mounted volume belongs to another host.')
+        else:
+            require(config['initialize'] and all(item.name == 'lost+found' for item in previous.iterdir()),
+                    'Refusing to adopt an unmarked existing volume.')
+        # A normal unmount fails if any process still uses this filesystem.
+        command('umount', str(previous))
+    # Remove only this volume's provider-generated persistent mount. The
+    # supervisor mounts it after identity checks on every boot instead.
+    fstab = Path('/etc/fstab')
+    info = fstab.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_mode & 0o022 == 0,
+            'Unsafe filesystem table.')
+    lines = fstab.read_text().splitlines(keepends=True)
+    kept = []
+    for line in lines:
+        fields = line.split()
+        if fields and not fields[0].startswith('#') and fields[0] in (
+                str(device), str(device.resolve()), 'UUID=' + uuid):
+            require(len(fields) >= 4 and fields[2] == 'ext4'
+                    and (Path(fields[1]).parent == Path('/mnt') or fields[1] == str(ROOT)),
+                    'Unexpected persistent volume mount.')
+        else:
+            kept.append(line)
+    if kept != lines:
+        save(fstab, ''.join(kept))
+        os.chmod(fstab, stat.S_IMODE(info.st_mode))
+        command('systemctl', 'daemon-reload')
+    if command('mountpoint', '-q', str(ROOT), check=False).returncode != 0:
+        require(not list(ROOT.iterdir()), 'Refusing to cover existing files with a volume mount.')
+        command('mount', '-t', 'ext4', '-o', 'rw,nosuid,nodev', str(device), str(ROOT))
+    mounted = json.loads(command('findmnt', '--json', '--mountpoint', str(ROOT),
+                                 '--output', 'UUID,FSTYPE,OPTIONS').stdout)['filesystems']
+    require(len(mounted) == 1 and mounted[0]['uuid'] == uuid and mounted[0]['fstype'] == 'ext4'
+            and {'rw', 'nosuid', 'nodev'}.issubset(mounted[0]['options'].split(',')),
+            'Mounted volume identity or mode does not match.')
+    final_mounts = json.loads(command('findmnt', '--json', '--list', '--source', 'UUID=' + uuid,
+                                      '--output', 'TARGET').stdout)['filesystems']
+    require(len(final_mounts) == 1 and final_mounts[0]['target'] == str(ROOT),
+            'The volume has a second mount. Refusing to start a writer.')
+    private_directory(ROOT)
+    return uuid
+
+
+def volume_state(config, uuid, initialize=False):
+    identity = {key: config[key] for key in ('hostId', 'volumeId')}
+    identity['filesystemUuid'] = uuid
+    fresh = False
+    if not MARKER.exists():
+        require(initialize and config['initialize'] and config.get('hostedClaim'),
+                'Established volume marker is absent. Refusing to initialize replacement state.')
+        require(all(entry.name == 'lost+found' for entry in ROOT.iterdir()), 'New volume is not empty.')
+        os.chmod(ROOT, 0o700)
+        for name, mode in (('data', 0o700), ('tmp', 0o1777), ('var-tmp', 0o1777)):
+            folder = ROOT / name
+            folder.mkdir(mode=mode)
+            os.chown(folder, 1000, 1000)
+            os.chmod(folder, mode)
+        state = {**identity, 'version': config['version'], 'image': config['image'], 'phase': 'prepared'}
+        save(MARKER, state)
+        fresh = True
+    else:
+        private_file(MARKER)
+        state = json.loads(MARKER.read_text())
+        require(all(state.get(key) == value for key, value in identity.items()), 'Volume belongs to a different host.')
+        require(state.get('phase') in ('prepared', 'starting', 'established'), 'Unknown volume state.')
+        require(isinstance(state.get('version'), str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', state['version']),
+                'Volume release boundary is missing.')
+        require(tuple(map(int, config['version'].split('.'))) >= tuple(map(int, state['version'].split('.'))),
+                'Image downgrade refused. Database migrations cannot be reversed.')
+        require(state.get('image') == config['image'] or state['version'] != config['version'],
+                'A different image requires a newer release version.')
+    for name in ('data', 'tmp', 'var-tmp'):
+        info = (ROOT / name).lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 1000, 'Persistent native state directory is absent or unsafe.')
+    return state, fresh
+
+
+# Read agent-controlled files as UID 1000, never as root. Do not export private keys.
+STATE_CHECK = '''import json, os, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1])
+for name in ('.config/OpenBot/openbot.db', '.config/OpenBot/openbot-central-auth-v1.bin',
+             '.config/openbot-container/keyring-password', '.local/share/keyrings/login.keyring'):
+    p = root / name
+    assert p.is_file() and p.stat().st_size > 0
+p = root / '.config/OpenBot/openbot-team-server-v2.json'
+assert p.stat().st_size < 1048576
+value = json.loads(p.read_text())
+assert any(host.get('serverId') == sys.argv[2] and host.get('privateKey') and host.get('publicKey')
+           for host in value['hosts'])
+'''
+
+
+def complete_state(config):
+    # The mount root stays private to root. This helper enters only the data directory
+    # before dropping privileges; relative opens cannot expose the host filesystem.
+    def demote():
+        os.chdir(ROOT / 'data')
+        os.setgroups([])
+        os.setgid(1000)
+        os.setuid(1000)
+    result = subprocess.run(['/usr/bin/python3', '-I', '-c', STATE_CHECK, '.', config['hostId']],
+                            preexec_fn=demote, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=10, check=False)
+    return result.returncode == 0
+
+
+def image_ready(config):
+    result = command('docker', 'image', 'inspect', config['image'], check=False)
+    if result.returncode != 0:
+        command('docker', 'pull', '--quiet', config['image'])
+        result = command('docker', 'image', 'inspect', config['image'])
+    image = json.loads(result.stdout)[0]
+    labels = image['Config'].get('Labels') or {}
+    require(labels.get('org.opencontainers.image.source') == 'https://github.com/bpickett2019/openbot'
+            and labels.get('org.opencontainers.image.version') == config['version'], 'Image release ownership does not match.')
+    require(image['Config'].get('User') in ('openbot', '1000', '1000:1000'), 'Image must use UID 1000.')
+
+
+def isolate_network():
+    current = command('docker', 'network', 'inspect', NETWORK, check=False)
+    if current.returncode != 0:
+        command('docker', 'network', 'create', '--driver', 'bridge', '--opt',
+                'com.docker.network.bridge.name=' + BRIDGE, '--opt',
+                'com.docker.network.bridge.enable_icc=false', NETWORK)
+        current = command('docker', 'network', 'inspect', NETWORK)
+    network = json.loads(current.stdout)[0]
+    require(network['Driver'] == 'bridge' and not network['EnableIPv6']
+            and network['Options'].get('com.docker.network.bridge.name') == BRIDGE
+            and network['Options'].get('com.docker.network.bridge.enable_icc') == 'false', 'Unsafe managed network.')
+    # Metadata can contain user_data. Deny it before a container exists. Also deny
+    # access to host services; no Docker socket or host network is passed through.
+    for chain, rule in (
+        ('DOCKER-USER', ['-i', BRIDGE, '-d', '169.254.0.0/16', '-j', 'DROP']),
+        ('INPUT', ['-i', BRIDGE, '-j', 'DROP']),
+    ):
+        if command('iptables', '-w', '-C', chain, *rule, check=False).returncode != 0:
+            command('iptables', '-w', '-I', chain, '1', *rule)
+
+
+def run(config):
+    uuid = mount_volume(config)
+    state, _ = volume_state(config, uuid)
+    first = state['phase'] == 'prepared'
+    if not first:
+        require(complete_state(config), 'Established native state is missing. Restore coherently before starting.')
+        if config.get('hostedClaim') is not None:
+            config['hostedClaim'] = None
+            save(CONFIG, config)
+    else:
+        require(config.get('hostedClaim'), 'First start requires a bounded bootstrap claim.')
+    image_ready(config)
+    isolate_network()
+    private_file(Path(SECCOMP))
+    current = command('docker', 'container', 'inspect', CONTAINER, check=False)
+    if current.returncode == 0:
+        container = json.loads(current.stdout)[0]
+        require(container['Config'].get('Labels', {}).get('openbot.host-id') == config['hostId'],
+                'Container name belongs to a different host.')
+        require(not container['State']['Running'], 'A writer is already running.')
+        command('docker', 'container', 'rm', CONTAINER)
+    state.update(version=config['version'], image=config['image'], phase='starting' if first else 'established')
+    save(MARKER, state)  # Record the high-water version before any migration can run.
+    runtime = Path('/run/openbot-host')
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    private_directory(runtime)
+    env = runtime / 'container.env'
+    environment = {
+        'HOME': '/data', 'XDG_CONFIG_HOME': '/data/.config', 'XDG_DATA_HOME': '/data/.local/share',
+        'XDG_CACHE_HOME': '/data/.cache', 'OPENBOT_HOSTED_SERVER': '1',
+        'OPENBOT_HOSTED_HOST_ID': config['hostId'], 'OPENBOT_AUTH_API_URL': config['accountOrigin'],
+        'OPENBOT_REMOTE_SIGNAL_URL': config['signalUrl'],
+    }
+    if first:
+        environment['OPENBOT_HOSTED_CLAIM'] = config['hostedClaim']
+    descriptor = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'w') as output:
+        output.write(''.join(key + '=' + value + '\n' for key, value in environment.items()))
+    arguments = ['docker', 'run', '--name', CONTAINER, '--label', 'openbot.host-id=' + config['hostId'],
+                 '--rm', '--network', NETWORK, '--user', '1000:1000', '--cap-drop', 'ALL',
+                 '--security-opt', 'no-new-privileges:true', '--security-opt', 'seccomp=' + SECCOMP,
+                 '--read-only', '--shm-size', '1g', '--stop-timeout', '60', '--pids-limit', '8192',
+                 '--ulimit', 'nofile=65536:524288', '--env-file', str(env),
+                 '--sysctl', 'net.ipv6.conf.all.disable_ipv6=1',
+                 '--tmpfs', '/run/openbot:mode=0700,uid=1000,gid=1000,size=64m',
+                 '--tmpfs', '/run/lock:mode=1777,size=1m']
+    for source, target in (('data', '/data'), ('tmp', '/tmp'), ('var-tmp', '/var/tmp')):
+        arguments += ['--mount', 'type=bind,src=' + str(ROOT / source) + ',dst=' + target]
+    arguments.append(config['image'])
+    stopping = False
+    def stop(_number, _frame):
+        nonlocal stopping
+        stopping = True
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    def stop_container():
+        current = command('docker', 'container', 'inspect', CONTAINER, check=False)
+        if current.returncode == 0:
+            container = json.loads(current.stdout)[0]
+            require(container['Config'].get('Labels', {}).get('openbot.host-id') == config['hostId'],
+                    'Refusing to stop a different host.')
+            if container['State']['Running']:
+                command('docker', 'stop', '--time', '60', CONTAINER)
+    process = subprocess.Popen(arguments, stdin=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 180
+        while process.poll() is None:
+            if stopping:
+                # A stop can arrive while docker run is still creating the container.
+                # Observe that creation before stopping it; never start after a stop.
+                stop_container()
+            elif first and state['phase'] != 'established':
+                if complete_state(config):
+                    state['phase'] = 'established'
+                    save(MARKER, state)
+                    config['hostedClaim'] = None
+                    save(CONFIG, config)
+                else:
+                    require(time.monotonic() < deadline, 'First start did not establish coherent native state.')
+            time.sleep(1)
+        result = process.wait()
+        require(result == 0 or stopping, 'Managed OpenBot exited with an error.')
+        require(stopping or state['phase'] == 'established', 'First start did not establish native state.')
+    finally:
+        cleanup_deadline = time.monotonic() + 75
+        while process.poll() is None:
+            stop_container()
+            require(time.monotonic() < cleanup_deadline, 'Container stop did not complete.')
+            time.sleep(1)
+        env.unlink(missing_ok=True)
+
+
+def main():
+    require(os.geteuid() == 0, 'Run the host supervisor as root.')
+    require(len(sys.argv) == 3 and sys.argv[1] in ('install', 'run') and sys.argv[2] == str(CONFIG),
+            'Usage: openbot-digitalocean-bootstrap install|run /etc/openbot-host/config.json')
+    os.umask(0o077)
+    with open('/run/openbot-host.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        config = configuration()
+        if sys.argv[1] == 'install':
+            uuid = mount_volume(config)
+            volume_state(config, uuid, initialize=True)
+            config.update(initialize=False, filesystemUuid=uuid)
+            save(CONFIG, config)
+        else:
+            run(config)
+    if sys.argv[1] == 'install':
+        command('systemctl', 'daemon-reload')
+        command('systemctl', 'enable', '--now', 'openbot-managed.service')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except RuntimeError as error:
+        # require() uses fixed messages and command names, never argument values.
+        sys.stderr.write(str(error) + '\n')
+        sys.exit(1)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        # Never include provider data, claim values, or an agent-controlled filename.
+        sys.stderr.write('Managed host bootstrap failed. Check volume identity, state, image and host prerequisites.\n')
+        sys.exit(1)

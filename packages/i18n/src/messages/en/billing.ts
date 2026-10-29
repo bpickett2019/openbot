@@ -3,7 +3,7 @@ import { defineMessages } from "../../message";
 export const messages = defineMessages("billing", {
   // The Billing tab in Settings and the Billing dialog in the web client.
   "billing.title": "Billing",
-  "billing.description": "Each server has its own plan. Stripe handles the payment.",
+  "billing.description": "View server plans and organization funding.",
   "billing.loading": "Loading billing…",
   "billing.unavailable": "Billing is not available on this account server.",
   "billing.loadFailed": "Could not load billing.",

@@ -83,6 +83,14 @@ export const messages = defineMessages("mobile.server", {
   "mobile.server.hosted.soldOut": "Sold out",
   // The plan and the billing period of one server of the account, such as "Standard · Yearly". {date} is a date.
   "mobile.server.hosted.serverPlan": "{plan} · {interval}",
+  "mobile.server.hosted.organizationFunded": "Organization funded",
+  "mobile.server.hosted.organizationSpec":
+    "{provider} · {vcpu} vCPU, {memory} GB memory, {disk} GB persistent storage · {region}",
+  "mobile.server.hosted.administratorStopped": "Administrator-managed stop",
+  "mobile.server.hosted.fundingRevokedDescription":
+    "Organization funding is inactive. Ask your administrator to restore funding before you start this server.",
+  "mobile.server.hosted.organizationDescription":
+    "Your organization manages this shared server. Staff join with an invitation.",
   "mobile.server.hosted.serverPlanEnds": "{plan} · {interval} · Ends on {date}",
   "mobile.server.hosted.state.payment": "Waiting for payment",
   "mobile.server.hosted.state.setup": "Setting up",

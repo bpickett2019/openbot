@@ -222,7 +222,7 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
   database
     .prepare("INSERT INTO users(id, identity_key, email, created_at, updated_at) VALUES (?, ?, ?, 1, 1)")
     .run("owner", "email:owner@example.test", "owner@example.test");
-  for (const index of [1, 2]) {
+  for (const index of [1]) {
     const serverId = `server-${index}`;
     const memberId = `member-${index}`;
     database
@@ -242,11 +242,13 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
     database
       .prepare(
         `INSERT INTO hosted_servers(
-           server_id, owner_user_id, name, provider_sandbox_id, size, plan, billing_interval, currency,
+           server_id, owner_user_id, name, provider, funding, funding_status, provider_phase,
+           provider_droplet_id, provider_volume_id, size, plan, billing_interval, currency,
            desired_state, observed_state, idempotency_key, created_at, updated_at
-         ) VALUES (?, 'owner', 'Cloud server', ?, 'default', 'standard', 'month', 'eur', 'deleted', 'running', ?, 1, 1)`,
+         ) VALUES (?, 'owner', 'Cloud server', 'digitalocean', 'organization', 'revoked', 'ready',
+           ?, ?, 'default', NULL, NULL, NULL, 'deleted', 'running', ?, 1, 1)`,
       )
-      .run(serverId, `bx_${index}`, `key-${index}`);
+      .run(serverId, index, `volume-${index}`, `key-${index}`);
   }
   // Events of earlier requests, which the cron's own drain reads beside the hosted server check.
   seedProfileEvents(database, 5, now);
@@ -261,9 +263,10 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
       order.push(`signal ${JSON.parse(String(init?.body)).type}`);
       return signal.fetch(url, init ?? {});
     }
-    if (url.startsWith("https://boat.dev/")) {
-      order.push(`boat ${init?.method ?? "GET"} ${new URL(url).pathname}`);
-      return Response.json({ ok: true });
+    if (url.startsWith("https://api.digitalocean.com/")) {
+      order.push(`provider ${init?.method ?? "GET"} ${new URL(url).pathname}`);
+      // The preceding delete requests completed; the cron must confirm both resources are absent.
+      return new Response(null, { status: 404 });
     }
     throw new Error(`Unexpected request: ${url}`);
   };
@@ -282,7 +285,7 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
         DB: sqliteD1(database),
         REMOTE_AUTH_WEBHOOK_URL: SIGNAL_URL,
         REMOTE_AUTH_WEBHOOK_SECRET: SECRET,
-        BOAT_API_KEY: "boat-key",
+        DIGITALOCEAN_API_TOKEN: "synthetic-provider-token",
         REMOTE_TICKET_PRIVATE_JWK: JSON.stringify({ ...privateJwk, kid: "ticket-1" }),
         REMOTE_TICKET_PUBLIC_JWKS: JSON.stringify({ keys: [{ ...publicJwk, kid: "ticket-1" }] }),
         REMOTE_TICKET_KEY_ID: "ticket-1",
@@ -292,21 +295,25 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
     globalThis.fetch = originalFetch;
   }
 
-  const lastBoatDelete = order.findLastIndex((entry) => entry.startsWith("boat DELETE"));
+  const lastProviderRead = order.findLastIndex((entry) => entry.startsWith("provider GET"));
   const firstHostEvent = order.findIndex((entry) => entry.startsWith("signal") && !entry.endsWith("profile-changed"));
-  check("the cron deletes both sandboxes", order.filter((entry) => entry.startsWith("boat DELETE")).length === 2, {
-    order,
-  });
   check(
-    "the cron sends the events of its deletes only after the last delete",
-    firstHostEvent > lastBoatDelete && lastBoatDelete >= 0,
+    "the cron confirms Droplet and volume deletion",
+    order.filter((entry) => entry.startsWith("provider GET")).length === 2,
+    {
+      order,
+    },
+  );
+  check(
+    "the cron sends deletion events only after provider cleanup is confirmed",
+    firstHostEvent > lastProviderRead && lastProviderRead >= 0,
     { order },
   );
   check("the cron sends each event once", duplicates(signal.state.bodies).length === 0, {
     duplicates: duplicates(signal.state.bodies),
   });
   // Per server: one auth epoch event and one servers event for its member.
-  check("the cron sends the 5 earlier events and the 4 events of its deletes", signal.state.bodies.length === 9, {
+  check("the cron sends the 5 earlier events and the 2 events of its delete", signal.state.bodies.length === 7, {
     sends: signal.state.bodies.length,
   });
   check("the cron leaves no event in the outbox", remaining(database).length === 0, { remaining: remaining(database) });
@@ -315,7 +322,7 @@ async function cronSendsTheEventsOfItsDeletesOnceAfterThem() {
     .all()
     .map((row) => row.observed_state);
   check(
-    "the cron finishes both deletes",
+    "the cron completes the one organization allocation deletion",
     states.every((state) => state === "deleted"),
     { states },
   );

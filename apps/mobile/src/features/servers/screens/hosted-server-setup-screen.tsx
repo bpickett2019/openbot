@@ -56,7 +56,7 @@ const STEPS = [
   },
 ] as const satisfies readonly { label: MobileTextKey; details: readonly MobileTextKey[] }[];
 
-const STEP_OF_STATUS: Record<Exclude<HostedSetupStatus, "error">, number> = {
+const STEP_OF_STATUS: Record<Exclude<HostedSetupStatus, "error" | "revoked">, number> = {
   payment: 0,
   creating: 1,
   starting: 2,
@@ -88,7 +88,8 @@ export function HostedServerSetupScreen() {
 
   // The error status does not tell which step failed, so it keeps the last step that ran.
   const lastStep = useRef(0);
-  if (status && status !== "error") lastStep.current = Math.min(STEP_OF_STATUS[status], STEPS.length - 1);
+  if (status && status !== "error" && status !== "revoked")
+    lastStep.current = Math.min(STEP_OF_STATUS[status], STEPS.length - 1);
   const current = status === "ready" ? STEPS.length : lastStep.current;
 
   const refreshServersRef = useRef(refreshServers);
@@ -97,7 +98,7 @@ export function HostedServerSetupScreen() {
   statusRef.current = status;
 
   useEffect(() => {
-    if (!calls || !serverId || settled) return;
+    if (!calls || !serverId || (settled && status !== "revoked")) return;
     let active = true;
     let reading = false;
     async function poll(): Promise<void> {
@@ -133,7 +134,7 @@ export function HostedServerSetupScreen() {
       clearInterval(timer);
       subscription.remove();
     };
-  }, [calls, serverId, settled]);
+  }, [calls, serverId, settled, status]);
 
   const previousStatus = useRef(status);
   useEffect(() => {
@@ -160,7 +161,7 @@ export function HostedServerSetupScreen() {
   }
 
   async function retry(): Promise<void> {
-    if (!calls || retrying) return;
+    if (!calls || retrying || status === "revoked") return;
     void haptics.impact("medium");
     setRetrying(true);
     setActionError(null);
@@ -177,24 +178,30 @@ export function HostedServerSetupScreen() {
   }
 
   const name = server?.name ?? t("mobile.server.hosted.defaultName");
-  const title = missing
-    ? t("mobile.server.hosted.expiredTitle")
-    : status === "ready"
-      ? t("mobile.server.hosted.readyTitle", { name })
-      : status === "error"
-        ? t("mobile.server.hosted.failedTitle")
-        : status === "payment"
-          ? t("mobile.server.hosted.paymentTitle")
-          : t("mobile.server.hosted.progressTitle", { name });
-  const description = missing
-    ? t("mobile.server.hosted.expiredDescription")
-    : status === "ready"
-      ? t("mobile.server.hosted.readyDescription")
-      : status === "error"
-        ? t("mobile.server.hosted.failedDescription")
-        : status === "payment"
-          ? t("mobile.server.hosted.paymentDescription")
-          : t("mobile.server.hosted.progressDescription");
+  const title =
+    status === "revoked"
+      ? t("mobile.server.hosted.administratorStopped")
+      : missing
+        ? t("mobile.server.hosted.expiredTitle")
+        : status === "ready"
+          ? t("mobile.server.hosted.readyTitle", { name })
+          : status === "error"
+            ? t("mobile.server.hosted.failedTitle")
+            : status === "payment"
+              ? t("mobile.server.hosted.paymentTitle")
+              : t("mobile.server.hosted.progressTitle", { name });
+  const description =
+    status === "revoked"
+      ? t("mobile.server.hosted.fundingRevokedDescription")
+      : missing
+        ? t("mobile.server.hosted.expiredDescription")
+        : status === "ready"
+          ? t("mobile.server.hosted.readyDescription")
+          : status === "error"
+            ? t("mobile.server.hosted.failedDescription")
+            : status === "payment"
+              ? t("mobile.server.hosted.paymentDescription")
+              : t("mobile.server.hosted.progressDescription");
 
   return (
     <SheetScrollView
@@ -217,14 +224,17 @@ export function HostedServerSetupScreen() {
         </Typography.Paragraph>
       </View>
 
-      {missing ? null : (
+      {missing || status === "revoked" ? null : (
         <View className="overflow-hidden rounded-grouped bg-grouped">
           {STEPS.map((step, index) => {
+            if (index === 0 && server?.funding === "organization") return null;
             const state = status === null ? "pending" : stepState(index);
             const detailKey = state === "active" ? step.details[Math.min(detail, step.details.length - 1)] : undefined;
             return (
               <View key={step.label}>
-                {index > 0 ? <View className="ml-14 h-px bg-grouped-border" /> : null}
+                {index > (server?.funding === "organization" ? 1 : 0) ? (
+                  <View className="ml-14 h-px bg-grouped-border" />
+                ) : null}
                 <SetupStep state={state} label={t(step.label)} detail={detailKey ? t(detailKey) : null} />
               </View>
             );
@@ -238,7 +248,7 @@ export function HostedServerSetupScreen() {
             {actionError}
           </Typography.Paragraph>
         ) : null}
-        {missing || status === "payment" ? null : status === "ready" ? (
+        {missing || status === "payment" || status === "revoked" ? null : status === "ready" ? (
           <Button
             size="lg"
             onPress={() => {

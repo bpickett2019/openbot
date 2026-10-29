@@ -2,7 +2,7 @@
 # The entrypoint of the OpenBot Docker image (docker/Dockerfile). It runs OpenBot as a self-hosted
 # server, as openbot-hosted-server does on a computer with systemd: a D-Bus session with an unlocked
 # keyring, so that Electron `safeStorage` can keep the account session, two virtual displays, and
-# `OPENBOT_SERVER=1`. Its owner signs it in with `docker exec -it openbot openbot login`.
+# `OPENBOT_SERVER=1`. Ordinary containers use `openbot login`; managed containers use their scoped host claim.
 #
 # It runs as the image user. The home folder of that user is the /data volume, so the database, the
 # workspaces, the provider sign-ins and the keyring stay when the container is replaced. The keyring
@@ -34,7 +34,7 @@ display_size() {
 # The Electron sandbox stays on. It makes user namespaces, and the default seccomp profile of Docker
 # refuses them to a container. `--no-sandbox` is never the answer.
 unshare --user --map-root-user true 2>/dev/null ||
-  fail "OpenBot cannot make a user namespace for the Electron sandbox. Start the container with --security-opt seccomp=seccomp.json. See https://github.com/nightly-labs/openbot/blob/main/docs/docker.md"
+  fail "OpenBot cannot make a user namespace for the Electron sandbox. Start the container with --security-opt seccomp=seccomp.json. See https://github.com/bpickett2019/openbot/blob/main/docs/docker.md"
 # The control socket of `openbot`. Main refuses a directory that other users can enter. The socket of
 # the last run stays in the container, and `openbot` must not take it for the new one.
 mkdir -p "$XDG_RUNTIME_DIR"

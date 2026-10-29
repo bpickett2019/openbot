@@ -2,34 +2,31 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../..");
-const compose = ["compose", "-f", "remote/compose.yaml"];
-
-await run("docker", [...compose, "build", "remote-api", "coturn"], root);
-await run("docker", [...compose, "up", "-d", "--no-build", "--no-deps", "remote-api"], root);
-
-const coturnExists = (await capture("docker", ["inspect", "openbot-coturn"], root)).code === 0;
-if (coturnExists) {
-  console.log("Draining coturn. The update waits until all relay allocations end.");
-  await run("docker", ["update", "--restart=no", "openbot-coturn"], root);
-  await run("docker", ["kill", "--signal=SIGUSR1", "openbot-coturn"], root);
-  await run("docker", ["wait", "openbot-coturn"], root);
+const args = process.argv.slice(2);
+if (!args.includes("--deploy") || args.some((arg) => !["--deploy", "--enable"].includes(arg))) {
+  throw new Error("Use remote:update --deploy [--enable] only after deployment and runtime approval.");
 }
-await run("docker", [...compose, "up", "-d", "--no-build", "--no-deps", "--force-recreate", "coturn"], root);
-await run("docker", [...compose, "ps"], root);
+if (!/^[a-f0-9]{32}$/u.test(process.env.CLOUDFLARE_ACCOUNT_ID ?? ""))
+  throw new Error("Set the approved CLOUDFLARE_ACCOUNT_ID before deployment.");
 
-async function run(command: string, args: string[], cwd: string): Promise<void> {
-  const result = await execute(command, args, cwd, "inherit");
-  if (result !== 0) throw new Error(`${command} failed with exit code ${result}.`);
-}
-
-async function capture(command: string, args: string[], cwd: string): Promise<{ code: number }> {
-  return { code: await execute(command, args, cwd, "ignore") };
-}
-
-function execute(command: string, args: string[], cwd: string, stdio: "inherit" | "ignore"): Promise<number> {
-  return new Promise((resolveExit, reject) => {
-    const child = spawn(command, args, { cwd, stdio, shell: false });
-    child.once("error", reject);
-    child.once("exit", (code) => resolveExit(code ?? 1));
-  });
-}
+// No encrypted upstream environment loader, secret arguments, implicit credential provisioning or retry.
+// Without --enable the Worker refuses every request and its existing alarm stops the Container.
+const environment = { ...process.env };
+delete environment.CLOUDFLARE_API_TOKEN;
+delete environment.CLOUDFLARE_ENV;
+const child = spawn(
+  "node",
+  [
+    resolve(root, "node_modules/wrangler/bin/wrangler.js"),
+    "deploy",
+    "--config",
+    "remote/cloudflare/wrangler.jsonc",
+    "--var",
+    `REMOTE_SIGNAL_ENABLED:${args.includes("--enable") ? "true" : "false"}`,
+  ],
+  { cwd: root, env: environment, stdio: "inherit", shell: false },
+);
+const { promise, resolve: resolveExit, reject } = Promise.withResolvers<void>();
+child.once("error", () => reject(new Error("Signal deployment could not start.")));
+child.once("exit", (code) => (code === 0 ? resolveExit() : reject(new Error("Signal deployment failed."))));
+await promise;
