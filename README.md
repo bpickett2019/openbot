@@ -340,9 +340,9 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 | `bun run hosting:setup list\|create\|revoke\|reactivate` | Operator-only organization-host lifecycle. Mutations preview by default and require `--execute` plus spending approval. See [hosted servers](docs/hosted-servers.md#operator-api). |
 | `bun run status:build` | Build the public status page in `apps/status/dist`. The `status-page` workflow adds `status.json` and `feed.xml` and publishes it to GitHub Pages at `status.openbot.run`. |
 | `bun run status:smoke` | Run the status page smoke test: update runs against a local fake service, the status webhooks against a local receiver, one read-only run against the live checks, and the built page in Chrome. It writes `.openbot-build/status-page/report.json`. |
-| `bun run remote:check` | Check the Remote API and local development Compose configuration. |
-| `bun run remote:check:compose` | Validate the development Compose configuration without starting a daemon. |
-| `bun run remote:update --deploy` | Deploy owned Cloudflare Signal disabled. `--enable` requires runtime approval; TURN uses Cloudflare Realtime. |
+| `bun run remote:check` | Check the Remote API and production/development Compose configuration. |
+| `bun run remote:check:compose` | Validate both Compose configurations without starting a daemon. |
+| `bun run remote:update --deploy` | Update the owned Linux Signal/coturn/ACME deployment. Run on the approved host with explicit owned settings and runtime approval. |
 | `bun run dev:all` | Start the Auth API, Signal service, and single local Electron instance. |
 | `bun run dev:slack` | Start the same stack as `bun run dev`, with two `cloudflared` quick tunnels, one to Signal and one to the local account API, so that Slack can send the development Slack app's events and install return to the agents on this computer. It reads `OPENBOT_DEV_SLACK_SIGNING_SECRET` from the ignored `.env.slack-dev`, and needs `SLACK_ROUTE_PRIVATE_JWK` and `SLACK_ROUTE_KEY_ID` in the shell environment. Takes the same options as `bun run dev`, such as `--shared`. See [docs/messaging.md](docs/messaging.md#test-slack-locally). |
 | `bun run dev:test-client` | Start the Auth API, Signal service, local instance, and an isolated second client for team testing. |
@@ -406,10 +406,10 @@ See [web client delivery](docs/web-client.md) for the release gate and focused c
 
 Publishing never creates a second OpenBot instance. The host keeps its Team API on loopback. A hidden,
 sandboxed Electron page connects it to invited clients through WebRTC. Signal carries only connection
-setup messages. Team data uses direct DataChannels when possible and encrypted Cloudflare Realtime
-TURN when direct ICE fails. Cloudflare also stores accounts, configuration, memberships, invitations,
-logical sessions and public assets. Signal/account services do not store desktop chats, files,
-commands or media, but Cloudflare is on the encrypted relay data path.
+setup messages. Team data uses direct DataChannels when possible and encrypted traffic through the
+operator's coturn relay when direct ICE fails. Cloudflare stores accounts, configuration, memberships,
+invitations, logical sessions and public assets. Signal/account services do not store desktop chats,
+files, commands or media. The owned TURN host is on the encrypted relay data path.
 
 The development runner advertises both Mobile Connect and its Signal service on the preferred private
 LAN interface. Restart the runner after changing networks so newly generated QR codes contain the
@@ -424,8 +424,8 @@ use a VPN that connects both devices, or provide HTTPS and WSS endpoints that fo
 stack's account API and Signal ports. Set `OPENBOT_MOBILE_AUTH_API_URL` to the reachable account API
 origin and `REMOTE_SIGNAL_URL` to the reachable Signal URL, including `/v1/signal`, before starting
 `bun run dev`. Use the ports reported by `bun run dev:status`; they can differ between worktrees.
-If direct WebRTC cannot connect, Signal needs owned `CLOUDFLARE_TURN_KEY_ID` and
-`CLOUDFLARE_TURN_API_TOKEN` inputs. An HTTP tunnel is not a TURN relay.
+If direct WebRTC cannot connect, Signal needs a reachable coturn relay, its `TURN_HOST`, and the
+matching `TURN_SHARED_SECRET`. An HTTP tunnel is not a TURN relay.
 Generate and scan a new Mobile Connect code after changing the account API address; an existing
 mobile session retains its original address.
 
@@ -444,7 +444,7 @@ machine running several worktrees those kill the other checkouts' work mid-write
 `dev:status` and `dev:stop` exist to make unnecessary.
 
 Set `OPENBOT_DEV_ICE_TRANSPORT_POLICY=relay` before this command to force Team API traffic through
-Cloudflare Realtime TURN. This option works only with the development renderer. Production starts with `all`.
+the configured TURN relay. This option works only with the development renderer. Production starts with `all`.
 
 The normal `check` command is offline and uses a fake App Server. Manual smoke scripts may use the
 signed-in subscription and must not run in CI.

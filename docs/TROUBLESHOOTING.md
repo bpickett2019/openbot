@@ -222,7 +222,9 @@ company installs its inspection certificate on the computer, OpenBot accepts it.
 OpenBot starts, such as Codex and Claude, check certificates by their own rules. Do not turn off
 certificate checks to work around a block.
 
-Ask the network administrator to allow these hosts over HTTPS (TCP 443) and WebSocket:
+For the upstream public service, ask the network administrator to allow these hosts over HTTPS
+(TCP 443) and WebSocket. For an owned deployment, replace its account, Signal, website and asset
+hosts with the configured owned domains; do not allow upstream endpoints as a fallback.
 
 | Host | Use |
 | --- | --- |

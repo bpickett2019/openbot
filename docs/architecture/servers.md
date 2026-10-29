@@ -746,9 +746,10 @@ the allocation reserved and are reconciled by exact identity rather than blindly
 
 The root-owned native-volume guard runs before the packaged OpenBot container, preserves the
 host/session/keyring identity, excludes another writer and rejects missing established state or
-image downgrades. The app's existing memory guards remain active. Accounts, the browser, Signal
-and Realtime TURN remain on Cloudflare. See [hosted servers](../hosted-servers.md) for bindings,
-operator authorization, costs, native state custody and unverified commissioning scenarios.
+image downgrades. The app's existing memory guards remain active. Accounts and the browser remain
+on Cloudflare. The owned Linux Signal/coturn/ACME deployment reuses the upstream connection stack.
+See [hosted servers](../hosted-servers.md) for bindings, operator authorization, costs, native state
+custody and unverified commissioning scenarios.
 
 A self-hosted server uses the same Linux build, scripts and units on the owner's own computer, with
 `/opt/OpenBot/hosted/mode` set to `self`. It has no claim: main starts in server mode

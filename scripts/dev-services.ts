@@ -445,6 +445,7 @@ async function allocateDevelopmentPorts(
       reservedPorts.add(healthPort);
       sharedEnvironment.REMOTE_HEALTH_PORT = String(healthPort);
       sharedEnvironment.REMOTE_SESSION_SECRET ??= randomBytes(32).toString("hex");
+      sharedEnvironment.TURN_SHARED_SECRET ??= randomBytes(32).toString("hex");
       if (signalPort !== DEFAULT_REMOTE_SIGNAL_PORT) {
         logger.info(`Signal port ${DEFAULT_REMOTE_SIGNAL_PORT} is busy. Using ${signalPort}.`);
       }
@@ -617,6 +618,7 @@ export function configureMobileConnectDevelopmentNetwork(
     environment.REMOTE_CONTROL_PLANE_URL ??= `http://127.0.0.1:${apiPort}`;
     environment.REMOTE_AUTH_WEBHOOK_URL ??= `http://127.0.0.1:${signalPort}/internal/auth-events`;
     environment.REMOTE_SIGNAL_URL ??= `ws://${address ?? "127.0.0.1"}:${signalPort}/v1/signal`;
+    environment.TURN_HOST ??= address ?? "127.0.0.1";
     environment.REMOTE_ALLOWED_ORIGINS ??= [
       `http://127.0.0.1:${apiPort}`,
       `http://localhost:${apiPort}`,

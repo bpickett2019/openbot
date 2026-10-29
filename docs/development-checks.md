@@ -31,14 +31,14 @@ therefore checks with TypeScript 6 without a warning.
 The `tsrs` version is exact and must be older than `minimumReleaseAge` in `bunfig.toml` (3 days).
 
 Signal had a similar gap: `remote:check` was its only entry point and also required Compose
-validation. `typecheck:remote` runs in CI. `remote:check:compose` validates the development
-Compose file with the Docker CLI without starting a daemon. `remote:check` remains the combined
-local command; production Signal is a separately approved Cloudflare deployment.
+validation. `typecheck:remote` runs in CI. `remote:check:compose` validates the production and
+development Compose files with the Docker CLI without starting a daemon. `remote:check` remains
+the combined local command; deployment to the owned Linux host requires separate approval.
 
 `remote/api/tsconfig.json` also covers `remote/scripts/*.ts`. These scripts use Bun, while root
 `scripts/**` and Electron main use Node types. Keep Bun types within the remote project rather than
-adding Bun globals at the root. `remote/scripts/update.ts --deploy` changes Cloudflare Signal;
-never run it as a check. Enabling runtime needs a separate allowance.
+adding Bun globals at the root. `remote/scripts/update.ts --deploy` changes the Linux Signal,
+coturn and ACME services; never run it as a check. Paid runtime needs a separate allowance.
 
 `tsconfig.node.json` and `tsconfig.web.json` set `verbatimModuleSyntax`: a file compiles alone the
 same way under `tsc` and the bundler, because a type-only import must say `import type`. It had no

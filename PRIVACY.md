@@ -689,11 +689,11 @@ Desktop media and input use a separate WebRTC connection. A paste in the Remote 
 sends the member's clipboard text to the host, which puts it on the host's clipboard. The live browser view sends compressed
 images of the host's browser tab, and the watching member's pointer and key input, over that same
 media connection. ICE uses a direct peer-to-peer path when possible. Otherwise encrypted WebRTC
-traffic passes through Cloudflare Realtime TURN. Signal requests short-lived credentials whose TTL
-is bounded by the authenticated session; the issuer's API token stays server-side. Signal tracks
-issued credentials only in process memory and requests revocation of known credentials when access
-ends. Unknown credentials after a lost process/uncertain issuance expire by TTL; immediate
-termination of every existing relay allocation is not guaranteed by this implementation.
+traffic passes through the operator's coturn relay. Signal signs short-lived credentials with a
+shared secret that stays on Signal and coturn; credential expiry is bounded by the authenticated
+session. Access revocation closes Signal access and prevents later credential refresh. Already
+issued TURN credentials remain usable until expiry, and immediate termination of existing relay
+allocations is not guaranteed.
 When the owner selects **Private network** in Settings › Mobile Connect, the host gets no STUN or
 TURN server, so no WebRTC traffic goes through a TURN relay. Team API connections then use only
 addresses on a private network, such as the Wi-Fi or a Tailscale tailnet. The desktop media
@@ -881,7 +881,7 @@ OpenBot account that connected it, and the Slack app and bot user IDs. It keeps 
 message. It gives the bot token to the computer encrypted to a key that only that computer has.
 
 Slack sends the workspace's events, which contain the Slack messages in the channels OpenBot is in
-and its direct messages, to OpenBot's Signal service (`signal.openbot.run`). Signal checks Slack's
+and its direct messages, to the configured Signal service. Signal checks Slack's
 signature and reads only the app ID and the workspace ID, to find the computer, and the type,
 channel type, thread and bot ID of the event, to know whether it addresses OpenBot. It passes each
 request to that computer over its Signal connection, in transit only: it does not store or log the
@@ -924,7 +924,7 @@ because the app's secret lives there, and revokes the Discord sign-in token that
 records which OpenBot computer answers the Discord server: the Discord server ID, the computer and the
 OpenBot account that connected it. It keeps no Discord token and no message.
 
-Discord has one bot token for every server, so only OpenBot's Signal service (`signal.openbot.run`)
+Discord has one bot token for every server, so only the configured Signal service
 holds it. Unlike Slack, both directions go through Signal:
 
 - **To the computer.** Signal keeps the bot's connection to Discord. Discord sends it the messages of
@@ -967,8 +967,8 @@ has, so Signal cannot read it; a restart of Signal deletes it.
 
 ## Telegram connections
 
-One OpenBot Telegram bot serves every user. Its token is only in OpenBot's Signal service
-(`signal.openbot.run`); no computer has it. The user connects a chat from OpenBot on their computer:
+One OpenBot Telegram bot serves every user. Its token is only in the configured Signal service;
+no computer has it. The user connects a chat from OpenBot on their computer:
 the account service gives a one-use code, and the browser opens a `t.me` link with it. When the user
 adds the bot to a group, or starts a direct chat with it, Telegram sends the code in that chat.
 Signal then asks the account service to link the chat to the computer. The account service records

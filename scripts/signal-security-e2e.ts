@@ -1,20 +1,23 @@
 // Starts the real Signal service (`remote/api`) on a free local port with throwaway secrets and a
 // fake account service, then checks its secret and authentication rules over real HTTP and
 // WebSocket connections: the Telegram secret header, the Slack signature, the signed account
-// events, the body limits, the remote and route tickets, a failed account service during an initial ticket check after a start, the generic webhook headers, the hello deadline, the reuse of
-// TURN credentials, and that no frame or log line holds the Telegram bot token. Writes .openbot-build/signal-security-e2e/report.json and exits
-// non-zero when a check fails. It makes no request to Telegram, Slack, Discord or Cloudflare.
+// events, body limits, remote and route tickets, account failures, generic webhook headers, the hello
+// deadline, and coturn credential expiry and Signal revocation. No frame or log may hold a server
+// secret. Writes .openbot-build/signal-security-e2e/report.json and exits non-zero on failure.
+// It makes no request to Telegram, Slack, Discord or a TURN server.
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHmac, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   createIngressQueueKeyPair,
   importIngressQueuePrivateKey,
   openQueuedDelivery,
 } from "@openbot/contracts/signal-protocol/ingress-queue";
+import { type IceServer, SIGNAL_TURN_CREDENTIAL_TTL_SECONDS } from "@openbot/contracts/signal-protocol/messages";
 import { SLACK_EVENTS_PATH } from "@openbot/contracts/signal-protocol/slack-route";
 import { TELEGRAM_ROUTE_AUDIENCE, TELEGRAM_UPDATES_PATH } from "@openbot/contracts/signal-protocol/telegram-route";
 import {
@@ -46,13 +49,8 @@ const TELEGRAM_WEBHOOK_SECRET = randomBytes(32).toString("base64url");
 const AUTH_WEBHOOK_SECRET = randomBytes(32).toString("base64url");
 const SLACK_APP_ID = "A0E2ETEST";
 const SLACK_SECRET = randomBytes(32).toString("hex");
-const TURN_KEY_ID = "signal-e2e";
-const TURN_API_TOKEN = randomBytes(32).toString("base64url");
-const turnMints: Array<{ ttl: number; username: string }> = [];
-const turnRevocations: string[] = [];
-let turnFailure = false;
-let revokeFailure = false;
-let nextMintGate: { entered: () => void; release: Promise<void> } | null = null;
+const TURN_SHARED_SECRET = randomBytes(32).toString("base64url");
+let nextValidationGate: { hostId: string; entered: () => void; release: Promise<void> } | null = null;
 const HOST_ID = "host-e2e";
 const ROUTED_CHAT = "-100";
 const SECOND_CHAT = "-300";
@@ -143,6 +141,12 @@ function startControlPlane(port: number): Promise<Server> {
     };
     if (!signed) return answer(401);
     if (path === "/v2/remote/resume/validate") {
+      const gate = nextValidationGate;
+      if (gate && gate.hostId === payload.hostId) {
+        nextValidationGate = null;
+        gate.entered();
+        await gate.release;
+      }
       if (payload.hostId === UNAVAILABLE_HOST_ID) return answer(503);
       return answer(200, { valid: payload.hostId !== INACTIVE_HOST_ID });
     }
@@ -157,64 +161,6 @@ function startControlPlane(port: number): Promise<Server> {
     return answer(404);
   });
   return new Promise((resolveServer) => server.listen(port, "127.0.0.1", () => resolveServer(server)));
-}
-
-function startTurnIssuer(port: number): Promise<Server> {
-  const server = createServer(async (request, response) => {
-    if (request.method !== "POST" || request.headers.authorization !== `Bearer ${TURN_API_TOKEN}`) {
-      response.writeHead(401).end();
-      return;
-    }
-    const prefix = `/v1/turn/keys/${TURN_KEY_ID}/credentials/`;
-    if (request.url === `${prefix}generate-ice-servers`) {
-      const input = await readBody(request, 1_024).catch(() => null);
-      if (input === null) return;
-      const { ttl } = JSON.parse(input);
-      if (!Number.isInteger(ttl) || ttl < 1 || ttl > 3_600) {
-        response.writeHead(400).end();
-        return;
-      }
-      const username = `synthetic-${randomUUID()}`;
-      turnMints.push({ ttl, username });
-      const gate = nextMintGate;
-      nextMintGate = null;
-      if (gate) {
-        gate.entered();
-        await gate.release;
-      }
-      if (turnFailure) {
-        response.writeHead(503).end(TURN_API_TOKEN);
-        return;
-      }
-      response.writeHead(201, { "Content-Type": "application/json" });
-      response.end(
-        JSON.stringify({
-          iceServers: [
-            { urls: ["stun:127.0.0.1:3478"] },
-            {
-              urls: ["turn:127.0.0.1:3478?transport=udp"],
-              username,
-              credential: randomBytes(24).toString("base64url"),
-            },
-          ],
-        }),
-      );
-      return;
-    }
-    if (request.url?.startsWith(prefix) && request.url.endsWith("/revoke")) {
-      if (revokeFailure) {
-        response.writeHead(503).end(TURN_API_TOKEN);
-        return;
-      }
-      turnRevocations.push(decodeURIComponent(request.url.slice(prefix.length, -"/revoke".length)));
-      response.writeHead(204).end();
-      return;
-    }
-    response.writeHead(404).end();
-  });
-  const { promise, resolve: resolveServer } = Promise.withResolvers<Server>();
-  server.listen(port, "127.0.0.1", () => resolveServer(server));
-  return promise;
 }
 
 // Tickets that the account service would sign for a host.
@@ -236,7 +182,14 @@ function remoteTicket(
   overrides: Partial<
     Pick<
       RemoteTicketClaims,
-      "hostId" | "membershipId" | "sessionId" | "role" | "sessionExpiresAt" | "protocolMinimum" | "protocolMaximum"
+      | "hostId"
+      | "membershipId"
+      | "sessionId"
+      | "role"
+      | "authEpoch"
+      | "sessionExpiresAt"
+      | "protocolMinimum"
+      | "protocolMaximum"
     >
   > = {},
   key = privateKey,
@@ -330,37 +283,34 @@ async function waitForReady(url: string, child: ChildProcess) {
   throw new Error("Signal did not become ready.");
 }
 
-const [signalPort, healthPort, controlPlanePort, turnPort] = await Promise.all([
-  freePort(),
-  freePort(),
-  freePort(),
-  freePort(),
-]);
+const [signalPort, healthPort, controlPlanePort] = await Promise.all([freePort(), freePort(), freePort()]);
 const controlPlane = await startControlPlane(controlPlanePort);
-const turnIssuer = await startTurnIssuer(turnPort);
 const serviceOutput: string[] = [];
+// Only what Signal needs, so no developer or production secret reaches it.
+const signalEnvironment = {
+  PATH: process.env.PATH ?? "",
+  HOME: process.env.HOME ?? "",
+  REMOTE_SIGNAL_HOST: "127.0.0.1",
+  REMOTE_SIGNAL_PORT: String(signalPort),
+  REMOTE_HEALTH_PORT: String(healthPort),
+  REMOTE_TLS_DISABLED: "true",
+  REMOTE_TICKET_PUBLIC_KEYS: JSON.stringify({ keys: [publicJwk] }),
+  REMOTE_CONTROL_PLANE_URL: `http://127.0.0.1:${controlPlanePort}`,
+  REMOTE_SESSION_SECRET: randomBytes(32).toString("base64url"),
+  REMOTE_AUTH_WEBHOOK_SECRET: AUTH_WEBHOOK_SECRET,
+  TURN_SHARED_SECRET,
+  TURN_HOST: "127.0.0.1",
+  TURN_PORT: "3478",
+  TURN_TLS_PORT: "5349",
+  REMOTE_BROWSER_ORIGIN: "https://browser.example.test",
+  REMOTE_ALLOWED_ORIGINS: "https://account.example.test",
+  SLACK_SIGNING_SECRET: `${SLACK_APP_ID}:${SLACK_SECRET}`,
+  TELEGRAM_BOT_TOKENS: BOT_TOKEN,
+  TELEGRAM_WEBHOOK_SECRET,
+};
 const child = spawn("bun", [resolve(ROOT, "remote/api/src/index.ts")], {
   cwd: resolve(ROOT, "remote/api"),
-  // Only what Signal needs, so no developer or production secret reaches it.
-  env: {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    REMOTE_SIGNAL_HOST: "127.0.0.1",
-    REMOTE_SIGNAL_PORT: String(signalPort),
-    REMOTE_HEALTH_PORT: String(healthPort),
-    REMOTE_TLS_DISABLED: "true",
-    REMOTE_TICKET_PUBLIC_KEYS: JSON.stringify({ keys: [publicJwk] }),
-    REMOTE_CONTROL_PLANE_URL: `http://127.0.0.1:${controlPlanePort}`,
-    REMOTE_SESSION_SECRET: randomBytes(32).toString("base64url"),
-    REMOTE_AUTH_WEBHOOK_SECRET: AUTH_WEBHOOK_SECRET,
-    CLOUDFLARE_TURN_KEY_ID: TURN_KEY_ID,
-    CLOUDFLARE_TURN_API_TOKEN: TURN_API_TOKEN,
-    REMOTE_TURN_API_ORIGIN: `http://127.0.0.1:${turnPort}`,
-    REMOTE_ALLOWED_ORIGINS: "https://account.example.test",
-    SLACK_SIGNING_SECRET: `${SLACK_APP_ID}:${SLACK_SECRET}`,
-    TELEGRAM_BOT_TOKENS: BOT_TOKEN,
-    TELEGRAM_WEBHOOK_SECRET,
-  },
+  env: signalEnvironment,
   stdio: ["ignore", "pipe", "pipe"],
 });
 child.stdout?.on("data", (chunk: Buffer) => serviceOutput.push(chunk.toString()));
@@ -396,6 +346,38 @@ const postSlack = (body: string, timestamp: string, signature: string) =>
 const slackSignature = (body: string, timestamp: string, secret = SLACK_SECRET) =>
   `v0=${hmac(secret, `v0:${timestamp}:${body}`, "hex")}`;
 const nowSeconds = () => String(Math.floor(Date.now() / 1_000));
+
+function expectTurnCredentials(servers: IceServer[], sessionId: string, sessionExpiresAt: number): number {
+  expect(servers.length === 2, "Expected STUN and authenticated TURN entries.");
+  expect(servers[0]?.urls === "stun:127.0.0.1:3478", "Unexpected STUN endpoint.");
+  const turn = servers[1];
+  expect(
+    JSON.stringify(turn?.urls) ===
+      JSON.stringify([
+        "turn:127.0.0.1:3478?transport=udp",
+        "turn:127.0.0.1:3478?transport=tcp",
+        "turns:127.0.0.1:5349?transport=tcp",
+      ]),
+    "Expected the configured coturn UDP, TCP and TLS endpoints.",
+  );
+  expect(typeof turn?.username === "string", "Missing TURN username.");
+  const separator = turn.username.indexOf(":");
+  const expiresAt = Number(turn.username.slice(0, separator));
+  const now = Math.floor(Date.now() / 1_000);
+  expect(separator > 0 && turn.username.slice(separator + 1) === sessionId, "Wrong TURN session identity.");
+  expect(
+    Number.isInteger(expiresAt) &&
+      expiresAt > now &&
+      expiresAt <= sessionExpiresAt &&
+      expiresAt <= now + SIGNAL_TURN_CREDENTIAL_TTL_SECONDS,
+    "TURN expiry exceeds the session or protocol limit.",
+  );
+  expect(
+    turn.credential === createHmac("sha1", TURN_SHARED_SECRET).update(turn.username).digest("base64"),
+    "TURN credential is not the coturn HMAC-SHA1 value.",
+  );
+  return expiresAt;
+}
 
 async function helloFails(name: string, ticket: string) {
   await check(name, async () => {
@@ -436,9 +418,44 @@ try {
   await waitForReady(`${base}/health/ready`, child);
   logger.info(`Signal is ready on port ${signalPort}.`);
 
+  await check("Signal refuses missing or weak coturn configuration before serving requests", async () => {
+    const cases: Array<{ values: Record<string, string | undefined>; message: string }> = [
+      { values: { TURN_SHARED_SECRET: undefined }, message: "TURN_SHARED_SECRET is required." },
+      { values: { TURN_SHARED_SECRET: "weak" }, message: "TURN_SHARED_SECRET must contain at least 32 bytes." },
+      { values: { TURN_HOST: undefined }, message: "TURN_HOST is required." },
+    ];
+    for (const entry of cases) {
+      const output: string[] = [];
+      const invalid = spawn("bun", [resolve(ROOT, "remote/api/src/index.ts")], {
+        cwd: resolve(ROOT, "remote/api"),
+        env: { ...signalEnvironment, ...entry.values },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      invalid.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+      invalid.stderr?.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+      const exited = Promise.withResolvers<number | null>();
+      invalid.once("close", exited.resolve);
+      invalid.once("error", exited.reject);
+      try {
+        const code = await withDeadline(exited.promise, "invalid configuration exit");
+        expect(code !== null && code !== 0, "Invalid coturn configuration did not stop startup.");
+        expect(output.join("").includes(entry.message), "Startup did not reject the required coturn setting.");
+        expect(!output.join("").includes(TURN_SHARED_SECRET), "Startup exposed the coturn shared secret.");
+      } finally {
+        if (invalid.exitCode === null && invalid.signalCode === null) invalid.kill("SIGTERM");
+      }
+    }
+    return "missing secret, weak secret and missing host fail closed before listener startup";
+  });
+
   await check("Only the configured browser and released desktop origins can upgrade", async () => {
     expect((await websocketUpgrade("https://foreign.example.test")) === 403, "Foreign origin was not refused.");
     expect((await websocketUpgrade("null")) === 403, "Opaque origin was not refused.");
+    expect((await websocketUpgrade("https://browser.example.test")) === 403, "Explicit origin list was widened.");
+    expect(
+      (await websocketUpgrade(signalEnvironment.REMOTE_CONTROL_PLANE_URL)) === 403,
+      "Control-plane origin was added to the explicit list.",
+    );
     expect((await websocketUpgrade("https://account.example.test")) === 101, "Account origin was refused.");
     expect((await websocketUpgrade("openbot-app://app")) === 101, "Released desktop origin was refused.");
     return "foreign and opaque origins denied; account and desktop origins accepted";
@@ -767,23 +784,7 @@ try {
     return `closed with ${code}`;
   });
 
-  // 6. Idle sockets and TURN credentials. The idle check runs between the two refreshes, so the
-  // second refresh is at least one second later and new credentials would have a new username.
-  const refresh = async (): Promise<string> => {
-    const before = ingress.frames.length;
-    ingress.socket.send(JSON.stringify({ type: "turn-refresh", version: 1, connectionId: null }));
-    const answer = JSON.parse(
-      await ingress.next(
-        (frame) => ingress.frames.indexOf(frame) >= before && frame.includes('"type":"ready"'),
-        "ready after turn-refresh",
-      ),
-    );
-    const usernames: unknown[] = (answer.iceServers ?? []).map((server: { username?: unknown }) => server.username);
-    const username = usernames.find((value) => typeof value === "string");
-    expect(typeof username === "string", `ready: ${JSON.stringify(answer).slice(0, 200)}`);
-    return username;
-  };
-  const firstRefresh = await refresh();
+  // 6. Idle sockets and coturn credentials. Refresh extends the TTL, not the logical session.
 
   await check("A socket that sends no hello is closed after the hello deadline", async () => {
     const peer = await connect(signalUrl);
@@ -799,14 +800,43 @@ try {
     return `closed with ${code} and an authentication_required error`;
   });
 
-  await check("A second turn-refresh soon after the first gets the same TURN credentials", async () => {
-    const second = await refresh();
-    expect(second !== "" && firstRefresh === second, "Signal made new TURN credentials for each turn-refresh.");
-    return "both answers have the same TURN username";
+  await check("TURN refresh preserves the session and uses bounded coturn credentials", async () => {
+    const sessionId = "session-refresh";
+    const sessionExpiresAt = Math.floor(Date.now() / 1_000) + 86_400;
+    const peer = await connect(signalUrl);
+    try {
+      peer.socket.send(
+        JSON.stringify({
+          type: "hello",
+          version: 1,
+          peer: "host",
+          token: await remoteTicket({ hostId: "host-refresh", sessionId, sessionExpiresAt }),
+        }),
+      );
+      const first = JSON.parse(await peer.next((frame) => frame.includes('"type":"ready"'), "refresh ready"));
+      const firstExpiry = expectTurnCredentials(first.iceServers, sessionId, sessionExpiresAt);
+      await delay(1_100);
+      const before = peer.frames.length;
+      peer.socket.send(JSON.stringify({ type: "turn-refresh", version: 1, connectionId: null }));
+      const refreshed = JSON.parse(
+        await peer.next(
+          (frame) => peer.frames.indexOf(frame) >= before && frame.includes('"type":"ready"'),
+          "refreshed credentials",
+        ),
+      );
+      expect(
+        expectTurnCredentials(refreshed.iceServers, sessionId, sessionExpiresAt) > firstExpiry,
+        "Refresh did not extend the credential expiry.",
+      );
+      expect(typeof refreshed.resumeToken === "string", "Refresh omitted the resume token.");
+      return "initial and refreshed credentials use HMAC-SHA1 with bounded expiry and the same session";
+    } finally {
+      peer.socket.close();
+    }
   });
 
-  await check("TURN TTL is capped by session expiry and reconnect shares the session credential", async () => {
-    const before = turnMints.length;
+  await check("TURN expiry stays at the session deadline across reconnect", async () => {
+    const sessionId = "session-ttl";
     const sessionExpiresAt = Math.floor(Date.now() / 1_000) + 45;
     const peer = await connect(signalUrl);
     peer.socket.send(
@@ -814,26 +844,35 @@ try {
         type: "hello",
         version: 1,
         peer: "host",
-        token: await remoteTicket({ hostId: "host-ttl", sessionExpiresAt }),
+        token: await remoteTicket({ hostId: "host-ttl", sessionId, sessionExpiresAt }),
       }),
     );
     const first = JSON.parse(await peer.next((frame) => frame.includes('"type":"ready"'), "TTL ready"));
-    expect(turnMints.length === before + 1, "Expected exactly one credential request.");
-    const minted = turnMints[before];
-    expect(minted !== undefined && minted.ttl > 0 && minted.ttl <= 35, "TTL exceeded the session deadline reserve.");
+    expect(
+      expectTurnCredentials(first.iceServers, sessionId, sessionExpiresAt) === sessionExpiresAt,
+      "Short session expiry was not used.",
+    );
     peer.socket.close();
     await withDeadline(peer.closed, "TTL peer closed");
     const resumed = await connect(signalUrl);
-    resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token: first.resumeToken }));
-    const second = JSON.parse(await resumed.next((frame) => frame.includes('"type":"ready"'), "resumed TTL ready"));
-    expect(JSON.stringify(first.iceServers) === JSON.stringify(second.iceServers), "Reconnect minted new credentials.");
-    expect(turnMints.length === before + 1, "Reconnect amplified credential issuance.");
-    resumed.socket.close();
-    return "short TTL respects session expiry; reconnect reuses the same credentials";
+    try {
+      resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token: first.resumeToken }));
+      const second = JSON.parse(await resumed.next((frame) => frame.includes('"type":"ready"'), "resumed TTL ready"));
+      expect(
+        expectTurnCredentials(second.iceServers, sessionId, sessionExpiresAt) === sessionExpiresAt,
+        "Reconnect extended the session deadline.",
+      );
+      expect(
+        JSON.stringify(first.iceServers) === JSON.stringify(second.iceServers),
+        "The same bounded session did not produce the same credentials.",
+      );
+      return "reconnect keeps the coturn credential expiry at the short session deadline";
+    } finally {
+      resumed.socket.close();
+    }
   });
 
-  await check("An expired session never calls the TURN provider", async () => {
-    const before = turnMints.length;
+  await check("An expired session receives no TURN credentials", async () => {
     const peer = await connect(signalUrl);
     peer.socket.send(
       JSON.stringify({
@@ -847,41 +886,34 @@ try {
       }),
     );
     expect((await withDeadline(peer.closed, "expired peer close")) === 1008, "Expired session was not denied.");
-    expect(turnMints.length === before, "Expired session called the issuer.");
-    return "authentication denied with no credential request";
+    expect(!peer.frames.some((frame) => frame.includes('"type":"ready"')), "Expired session received credentials.");
+    return "authentication denied with no ready frame";
   });
 
-  await check("A TURN provider failure cannot admit a peer or expose its response", async () => {
-    turnFailure = true;
-    try {
-      const token = await remoteTicket({ hostId: "host-turn-failure" });
-      const peer = await connect(signalUrl);
-      peer.socket.send(
-        JSON.stringify({
-          type: "hello",
-          version: 1,
-          peer: "host",
-          token,
-        }),
-      );
-      expect(
-        (await withDeadline(peer.closed, "failed issuer peer close")) === 1013,
-        "Provider failure did not close with 1013.",
-      );
-      expect(!peer.frames.some((frame) => frame.includes('"type":"ready"')), "Failed provider admitted a peer.");
-      const minted = turnMints.length;
-      const retry = await connect(signalUrl);
-      retry.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
-      expect((await withDeadline(retry.closed, "issuer retry close")) === 1013, "Failed issuer retry was admitted.");
-      expect(turnMints.length === minted, "Reconnect amplified a failed mint.");
-      return "no ready frame, no fallback, bounded failed issuance";
-    } finally {
-      turnFailure = false;
-    }
+  await check("An admitted session expires and cannot refresh or resume", async () => {
+    const sessionId = "session-expires";
+    const sessionExpiresAt = Math.floor(Date.now() / 1_000) + 3;
+    const peer = await connect(signalUrl);
+    peer.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "host",
+        token: await remoteTicket({ hostId: "host-expires", sessionId, sessionExpiresAt }),
+      }),
+    );
+    const ready = JSON.parse(await peer.next((frame) => frame.includes('"type":"ready"'), "expiring ready"));
+    expectTurnCredentials(ready.iceServers, sessionId, sessionExpiresAt);
+    expect((await withDeadline(peer.closed, "session expiry")) === 1008, "Expired peer stayed connected.");
+    const resumed = await connect(signalUrl);
+    resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token: ready.resumeToken }));
+    expect((await withDeadline(resumed.closed, "expired resume")) === 1008, "Expired resume was accepted.");
+    expect(!resumed.frames.some((frame) => frame.includes('"type":"ready"')), "Expired resume received credentials.");
+    return "session deadline closes access; its resume token cannot obtain new credentials";
   });
 
-  await check("Revocation during a shared mint denies both sockets and revokes the late credential", async () => {
-    const hostId = "host-revoke-mint";
+  await check("Revocation during account validation denies admission and old-epoch reconnect", async () => {
+    const hostId = "host-revoke-validation";
     const anchor = await connect(signalUrl);
     anchor.socket.send(
       JSON.stringify({
@@ -891,43 +923,64 @@ try {
         token: await remoteTicket({ hostId }),
       }),
     );
-    await anchor.next((frame) => frame.includes('"type":"ready"'), "revocation anchor ready");
+    const ready = JSON.parse(await anchor.next((frame) => frame.includes('"type":"ready"'), "revocation anchor ready"));
     const entered = Promise.withResolvers<void>();
     const released = Promise.withResolvers<void>();
-    nextMintGate = { entered: entered.resolve, release: released.promise };
-    const token = await remoteTicket({ hostId });
-    const first = await connect(signalUrl);
-    const second = await connect(signalUrl);
-    first.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
-    await withDeadline(entered.promise, "provider mint entered");
-    const before = turnMints.length;
-    second.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token }));
-    const body = JSON.stringify({ type: "remote-auth-changed", hostId, authEpoch: 2 });
-    const timestamp = nowSeconds();
-    const event = postAuthEvent(body, timestamp, hmac(AUTH_WEBHOOK_SECRET, `${timestamp}.${body}`, "base64url"));
+    nextValidationGate = { hostId, entered: entered.resolve, release: released.promise };
+    const pending = await connect(signalUrl);
     try {
-      // Closure of an admitted peer is the barrier: revocation was recorded before issuer release.
+      pending.socket.send(
+        JSON.stringify({
+          type: "hello",
+          version: 1,
+          peer: "host",
+          token: await remoteTicket({ hostId }),
+        }),
+      );
+      await withDeadline(entered.promise, "account validation entered");
+      const body = JSON.stringify({ type: "remote-auth-changed", hostId, authEpoch: 2 });
+      const timestamp = nowSeconds();
+      expect(
+        (await postAuthEvent(body, timestamp, hmac(AUTH_WEBHOOK_SECRET, `${timestamp}.${body}`, "base64url")))
+          .status === 204,
+        "Revocation was not acknowledged.",
+      );
       expect((await withDeadline(anchor.closed, "revocation barrier")) === 1008, "The anchor was not revoked.");
     } finally {
       released.resolve();
+      nextValidationGate = null;
+      anchor.socket.close();
     }
-    expect((await event).status === 204, "The late credential was not revoked.");
-    await withDeadline(first.closed, "first revoked mint close");
-    await withDeadline(second.closed, "second revoked mint close");
-    expect(turnMints.length === before, "Concurrent hello amplified the mint.");
-    const pendingMint = turnMints[before - 1];
     expect(
-      pendingMint !== undefined && turnRevocations.includes(pendingMint.username),
-      "The late credential was not sent for revocation.",
+      (await withDeadline(pending.closed, "pending authentication close")) === 1008,
+      "Revoked pending authentication was admitted.",
     );
     expect(
-      ![...first.frames, ...second.frames].some((frame) => frame.includes('"type":"ready"')),
-      "Revoked mint admitted a peer.",
+      !pending.frames.some((frame) => frame.includes('"type":"ready"')),
+      "Revoked authentication received credentials.",
     );
-    return "one provider mint; no ready frames; late credential revoked";
+    const resumed = await connect(signalUrl);
+    resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "host", token: ready.resumeToken }));
+    expect((await withDeadline(resumed.closed, "revoked host resume")) === 1008, "Old-epoch resume was accepted.");
+    expect(!resumed.frames.some((frame) => frame.includes('"type":"ready"')), "Old-epoch resume received credentials.");
+    const current = await connect(signalUrl);
+    try {
+      current.socket.send(
+        JSON.stringify({
+          type: "hello",
+          version: 1,
+          peer: "host",
+          token: await remoteTicket({ hostId, authEpoch: 2 }),
+        }),
+      );
+      await current.next((frame) => frame.includes('"type":"ready"'), "current epoch ready");
+    } finally {
+      current.socket.close();
+    }
+    return "revocation blocks pending and old-epoch access; a current-epoch ticket can connect";
   });
 
-  await check("Session revocation closes access before provider failure and the outbox can retry", async () => {
+  await check("Session revocation closes access and denies refresh and reconnect", async () => {
     const hostId = "host-turn-revocation";
     const sessionId = "client-turn-revocation";
     const host = await connect(signalUrl);
@@ -945,31 +998,39 @@ try {
       }),
     );
     const frame = JSON.parse(await client.next((item) => item.includes('"type":"ready"'), "revocation client ready"));
-    const username = frame.iceServers.find((server: { username?: string }) => server.username)?.username;
+    expectTurnCredentials(frame.iceServers, sessionId, Math.floor(Date.now() / 1_000) + 86_400);
     const body = JSON.stringify({ type: "remote-session-ended", hostId, sessionId });
     const timestamp = nowSeconds();
     const signature = hmac(AUTH_WEBHOOK_SECRET, `${timestamp}.${body}`, "base64url");
-    revokeFailure = true;
-    try {
-      const event = postAuthEvent(body, timestamp, signature);
-      expect(
-        (await withDeadline(client.closed, "revoked session close")) === 1008,
-        "Access did not close before provider I/O.",
-      );
-      expect((await event).status === 503, "Incomplete provider revocation was acknowledged.");
-    } finally {
-      revokeFailure = false;
-    }
-    expect((await postAuthEvent(body, timestamp, signature)).status === 204, "Repeated revocation did not finish.");
-    expect(turnRevocations.includes(username), "The session credential was not revoked.");
+    expect((await postAuthEvent(body, timestamp, signature)).status === 204, "Revocation was not acknowledged.");
+    expect((await withDeadline(client.closed, "revoked session close")) === 1008, "Revoked client stayed connected.");
+    expect(
+      (await postAuthEvent(body, timestamp, signature)).status === 204,
+      "Repeated revocation was not acknowledged.",
+    );
+    const resumed = await connect(signalUrl);
+    resumed.socket.send(JSON.stringify({ type: "hello", version: 1, peer: "client", token: frame.resumeToken }));
+    expect((await withDeadline(resumed.closed, "revoked client resume")) === 1008, "Revoked session resumed.");
+    expect(!resumed.frames.some((item) => item.includes('"type":"ready"')), "Revoked resume received credentials.");
+    const fresh = await connect(signalUrl);
+    fresh.socket.send(
+      JSON.stringify({
+        type: "hello",
+        version: 1,
+        peer: "client",
+        token: await remoteTicket({ hostId, sessionId, role: "member", membershipId: "member-turn-revocation" }),
+      }),
+    );
+    expect((await withDeadline(fresh.closed, "revoked client ticket")) === 1008, "A new ticket bypassed revocation.");
+    expect(!fresh.frames.some((item) => item.includes('"type":"ready"')), "Revoked ticket received credentials.");
     host.socket.close();
-    return "access closed first; 503 on provider failure; repeated event finishes revocation";
+    return "Signal closes the revoked session and refuses new credentials; existing TURN allocations are not tested";
   });
 
-  await check("No frame or log exposes the TURN issuer token", async () => {
-    expect(!allFrames.some((frame) => frame.includes(TURN_API_TOKEN)), "A frame holds the issuer token.");
-    expect(!serviceOutput.some((line) => line.includes(TURN_API_TOKEN)), "A log holds the issuer token.");
-    return "provider error bodies and issuer credentials remain private";
+  await check("No frame or log exposes the coturn shared secret", async () => {
+    expect(!allFrames.some((frame) => frame.includes(TURN_SHARED_SECRET)), "A frame holds the shared secret.");
+    expect(!serviceOutput.some((line) => line.includes(TURN_SHARED_SECRET)), "A log holds the shared secret.");
+    return "only short-lived TURN credentials reach clients";
   });
 
   await check("Signal signs each request to the account service", async () => {
@@ -993,7 +1054,6 @@ try {
 } finally {
   child.kill("SIGTERM");
   controlPlane.close();
-  turnIssuer.close();
 }
 
 mkdirSync(OUT, { recursive: true });
@@ -1008,6 +1068,7 @@ const report = {
     "File token download: it downloads from the real Bot API.",
     "Webhook acknowledgement only from the receiving socket: it needs a full delivery and commit exchange.",
     "Discord routes: they need the real Discord Gateway.",
+    "Real coturn relay allocation and expiry: this local check validates credentials, not a running TURN server.",
   ],
 };
 writeFileSync(resolve(OUT, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

@@ -2,7 +2,7 @@
 
 This directory holds the Signal control plane for WebRTC connections. Signal relays SDP and ICE,
 not Team files, chats, commands or desktop media. Direct WebRTC is preferred; encrypted relay
-traffic passes through Cloudflare Realtime when TURN is needed. Signal also carries the optional
+traffic passes through the owned coturn service when TURN is needed. Signal also carries the optional
 Slack, Discord and Telegram connector payloads described below.
 
 ## Flow
@@ -11,12 +11,12 @@ Slack, Discord and Telegram connector payloads described below.
 2. Cloudflare D1 checks membership and creates a logical session.
 3. Cloudflare signs a short ES256 ticket. The ticket names the host, the user, the role, the protocol version and `authEpoch`.
 4. The client and the host open `WSS /v1/signal`. Signal validates the ticket locally through JWKS.
-5. Signal relays SDP and ICE and issues a `resume token` with session-bounded Cloudflare Realtime TURN credentials.
+5. Signal relays SDP and ICE and issues a `resume token` with session-bounded coturn credentials.
 6. Chromium sets up WebRTC. The Team API uses the `rpc`, `events` and `files` channels.
-7. ICE picks a direct `p2p` path or an encrypted `relay` path through Cloudflare Realtime.
+7. ICE picks a direct `p2p` path or an encrypted `relay` path through coturn.
 
-Signal has no application database. Rooms, presence, resume caches and the issued TURN credential
-ledger exist only in process memory. The queue of a hosted server that sleeps also lives in memory (see
+Signal has no application database. Rooms, presence and resume caches exist only in process memory.
+The queue of a hosted server that sleeps also lives in memory (see
 [Sleeping hosted servers](#sleeping-hosted-servers)): Signal keeps a Slack, Discord or Telegram event
 for it in memory, sealed to the host's key so that Signal cannot read it, for at most 10 minutes.
 
@@ -151,53 +151,87 @@ service before Signal.
 
 ## Production requirements
 
-The fork deployment is `remote/cloudflare/wrangler.jsonc`: one `lite` Container, default scheduling
-policy, one fixed Durable Object identity and public Worker HTTPS/WSS ingress. Do not load-balance
-independent in-memory Signal owners. Private Worker-to-Container transport is HTTP; public transport
-must remain HTTPS/WSS. The Worker replaces caller-supplied forwarding identity and strips cookies.
+The Linux deployment follows public upstream
+[`nightly-labs/openbot@f3e3f8a`](https://github.com/nightly-labs/openbot/tree/f3e3f8ade9c146e96d9d68d65770d2a9126a7856/remote):
+one `remote-api`, coturn and ACME in `remote/compose.yaml`, with optional host nginx.
+All clients must reach this one in-memory Signal owner. Do not load-balance independent Signal
+processes. This host does not hold the desktop database, workspaces or browser profiles.
+The managed desktop remains on its separate DigitalOcean native ext4 Volume, with ODIC funding,
+operator-only lifecycle controls and the single-allocation limit unchanged.
 
-Required Worker secret bindings:
+Use an owned Linux host, domains, Cloudflare DNS zone and restricted DNS API token. Both Signal and
+TURN DNS records must be **DNS-only**, not proxied. Use reachable IPv4 records; publish IPv6 only
+after its routing and firewall are tested. Permit TCP 443 for Signal, UDP/TCP 3478 for TURN,
+TCP 5349 for TURN TLS, and UDP 49152–65535 for relay allocations. If DTLS is used, also permit UDP
+5349. DNS-01 ACME needs outbound DNS/HTTPS, not inbound port 80. Do not expose health port 8080 or
+coturn metrics port 9641. The optional nginx redirect uses TCP 80.
 
-| Binding | Value |
+`remote/.env.example` is a reference, not a runnable secret file. Export owned settings from an
+operator-controlled secret store. No command here loads `.env.production`, `.env.keys` or an
+upstream encrypted environment. Required settings:
+
+| Setting | Value |
 | --- | --- |
-| `REMOTE_CONTROL_PLANE_URL` | The owned account HTTPS origin. JWKS and allowed browser origins derive from it. |
-| `REMOTE_SIGNAL_ORIGIN` | The actual Signal HTTPS origin, without a path. |
-| `REMOTE_SESSION_SECRET` | Independent secret of at least 32 bytes. |
-| `REMOTE_AUTH_WEBHOOK_SECRET` | At least 32 bytes; identical to the account Worker's webhook secret. |
-| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Owned Cloudflare Realtime issuer credentials; never sent to clients. |
+| `REMOTE_DEPLOY_HOST` | Exact `hostname` of the approved Linux host; the update uses its local Docker socket. |
+| `ACME_EMAIL`, `SIGNAL_DOMAIN`, `TURN_DOMAIN` | Owned certificate contact and DNS names. ACME issues one certificate for both names. |
+| `CLOUDFLARE_DNS_API_TOKEN` | DNS Edit and Zone Read, restricted to the owned zones; available only to ACME. |
+| `TURN_PUBLIC_IP` | The host's reachable public IP; use coturn's public/private mapping if behind NAT. |
+| `REMOTE_CONTROL_PLANE_URL` | Owned canonical account HTTPS origin. |
+| `REMOTE_TICKET_JWKS_URL` | Owned account `/.well-known/jwks.json`; never a private signing key. |
+| `REMOTE_SESSION_SECRET` | Independent random secret of at least 32 bytes. |
+| `REMOTE_AUTH_WEBHOOK_SECRET` | At least 32 bytes; identical to the account service's webhook secret. |
+| `TURN_SHARED_SECRET` | Independent random printable secret of at least 32 bytes, shared only by Signal and coturn. |
+| `OPENBOT_SOURCE_COMMIT` | Reviewed source commit to show in health output. |
 
-Optional connector/metrics bindings retain their current names. The browser origin must match
-the owned account origin. The released `openbot-app://app` desktop origin and native peers without
-an Origin header remain supported; opaque `null` and unrelated browser origins are refused.
-If an existing same-origin website proxy uses a different public origin, set `REMOTE_BROWSER_ORIGIN`
-to that one exact HTTPS origin. It replaces the browser origin; JWKS and account calls still use
-`REMOTE_CONTROL_PLANE_URL`. The selected Cloudflare-only website needs no override.
+`REMOTE_BROWSER_ORIGIN` selects one exact website origin when it differs from the account origin.
+It does not change account requests or JWKS. `REMOTE_ALLOWED_ORIGINS`, if explicitly set, is the
+authoritative list; an empty value permits only the released `openbot-app://app` desktop origin.
+Native peers without an Origin header remain supported; opaque `null` and foreign browser origins
+are refused. Compose passes these inputs explicitly. Metrics and messaging integrations stay off
+unless their own credentials are configured. Telegram webhook registration is an external mutation
+when `TELEGRAM_WEBHOOK_ORIGIN` and its credentials are set.
 
-Set secrets with Wrangler against the explicit owned account and this configuration; do not load
-upstream encrypted environment files. The deployment command requires an explicit account ID and
-uses the operator's Wrangler login. It starts disabled:
+### Checks and deployment
+
+```sh
+bun run remote:check:compose
+```
+
+This checks both Compose definitions with isolated synthetic inputs. It does not load real secrets,
+contact a daemon, pull images, issue certificates or start services. `remote:check` also runs the
+Remote API source check. Neither command proves DNS, TLS, native storage or relay operation.
+
+After separate deployment and recurring-cost approval, run on the intended Linux host:
 
 ```sh
 bun run remote:update --deploy
 ```
 
-Only an approved runtime allowance permits `--deploy --enable`. Deployment/build success is not
-a readiness or relay test. Set account `REMOTE_SIGNAL_URL` to `wss://<signal-host>/v1/signal`;
-the account deployment derives its webhook URL as `https://<signal-host>/internal/auth-events`.
-See [the deployment and acceptance procedure](../docs/remote-session-deployment.md).
+This is a mutating operation: it builds images, starts ACME and Signal, drains an existing coturn
+with `SIGUSR1`, waits for allocations to end, then recreates coturn. There is no implicit deploy,
+remote SSH target, encrypted loader or runtime enable flag. The command does not provision a host
+or a DNS record. It requires Docker Compose with `up --wait`. It can wait a long time while relay
+allocations drain. If interrupted after restart was disabled, inspect coturn before recovery; do not
+force-stop active allocations without approval. ACME renews every 12 hours when within 30 days of
+expiry; Signal and coturn check certificate changes every five minutes.
 
-Realtime issuance is asynchronous, deadline-bounded and capped by the remaining authenticated
-session life. Reconnect/refresh shares the session's credential and pending request. Provider
-failures do not fall back to empty ICE lists or upstream TURN.
+Direct mode uses Signal TLS on public TCP 443, with `REMOTE_TRUST_PROXY=false`. Optional host nginx
+terminates TLS instead; see the template setup in
+[the deployment procedure](../docs/remote-session-deployment.md#optional-host-nginx).
+Never expose plain HTTP or trust arbitrary forwarding headers on a public listener.
 
-Revocation denies local access before provider I/O. Known issued credentials, including a late
-mint response, are revoked; failed revocation returns 503 so the account outbox can retry. The ledger
-is process-owned. Credentials lost with a process or an uncertain provider response can only expire
-by their bounded TTL. This does not prove immediate termination of every existing TURN allocation.
+Set account `REMOTE_SIGNAL_URL` to `wss://<owned-signal-host>/v1/signal` and its auth-event webhook
+to `https://<owned-signal-host>/internal/auth-events`. Deploy compatible account routes before Signal.
+Public `/health/live` and `/health/ready` are checks, not deployment or relay proof.
+
+TURN passwords use HMAC-SHA1 with `TURN_SHARED_SECRET`; clients receive only bounded credentials
+whose expiry does not exceed the session expiry. Access and session revocation refuse further
+Signal access and credentials. This does not immediately revoke already issued coturn credentials
+or end existing allocations. Do not claim immediate TURN termination.
 
 Replacing Signal closes its WebSockets and clears process state. Check active direct and relay
-connections, independent device sessions and reconnects during an approved replacement. Do not
-claim transport preservation from health checks alone.
+connections, independent sessions and reconnects during an approved replacement. Coturn drain
+preserves existing allocations until they end; it is not proof of uninterrupted application traffic.
 
 Current hosts advertise `multiplex: true` and support independent device sessions at the same time.
 Reconnecting one session replaces only that session's Signal socket. Disconnecting or revoking one device
@@ -214,10 +248,9 @@ on the Signal server: a desktop environment does not change it.
 This also applies when the old client socket waits for its host to reconnect. Token signing finishes
 before Signal admits the new socket, so concurrent reconnects do not hold extra account slots.
 
-Worker secret/variable changes require an explicit owned deployment. There is no production
-Compose/coturn/ACME launcher or automatic upstream secret loading. `compose.dev.yaml` is for local
-development only. Without a configured TURN issuer, local health can start but TURN issuance fails
-explicitly. `bun run test:signal` exercises HTTP/WebSocket behavior with synthetic credentials;
-it is not a Cloudflare Realtime acceptance test.
+Environment changes require an explicit owned deployment. `compose.dev.yaml` starts Signal only;
+it does not start a relay. Configure an actual reachable coturn for local relay acceptance.
+`bun run test:signal` checks HTTP/WebSocket behavior with synthetic credentials, not a real relay.
+Source checks do not authorize Linux hosting costs, deployment, subscriptions or release publication.
 
 To run Signal with your own account service, see [Self-hosted remote access](../docs/self-hosting.md).

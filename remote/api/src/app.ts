@@ -151,15 +151,9 @@ export function createRemoteApiApp(
         set.status = 400;
         return { error: { code: "invalid_event", message: "The auth event is invalid." } };
       }
-      if (event.type === "remote-auth-changed" || event.type === "remote-session-ended") {
-        const revocation =
-          event.type === "remote-auth-changed"
-            ? signal.revoke(event.hostId, event.authEpoch)
-            : signal.revokeSession(event.sessionId);
-        const result = await runtime.runPromise(revocation.pipe(Effect.result));
-        // Local access is already denied. A 503 asks the account outbox to retry unfinished TURN revocation.
-        if (Result.isFailure(result)) return emptyResponse(503);
-      } else if (event.type === "account-profile-changed") signal.profileChanged(event.userId);
+      if (event.type === "remote-auth-changed") signal.revoke(event.hostId, event.authEpoch);
+      else if (event.type === "remote-session-ended") signal.revokeSession(event.sessionId);
+      else if (event.type === "account-profile-changed") signal.profileChanged(event.userId);
       else if (event.type === "account-servers-changed") signal.serversChanged(event.userId);
       else if (event.type === "slack-route-revoked") signal.revokeSlackRoute(event.appId, event.teamId, event.through);
       else if (event.type === "telegram-route-revoked")

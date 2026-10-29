@@ -23,14 +23,17 @@ self-hosted account service with its own keys. See
 
 ## What you need
 
-- An owned Cloudflare account with Workers, D1, R2, Containers and Realtime TURN access.
+- An owned Cloudflare account with Workers, D1 and R2 access.
+- An approved Linux host for Signal/coturn/ACME, with a static public IP, owned Signal/TURN DNS names
+  and relay bandwidth. Set these records to DNS only, not Cloudflare proxying.
 - An SMTP account that accepts TLS on port 465. Sign-in sends a one-time code by email.
 - A clone of this fork, [Bun](https://bun.sh), and Node for Wrangler. Native desktop images need a Linux builder.
 - Explicit deployment/runtime approval. Managed desktop storage additionally requires the
-  [persistent-disk hosting configuration](hosted-servers.md); a Signal Container is not desktop storage.
+  [persistent-disk hosting configuration](hosted-servers.md); the separate Signal host is not desktop storage.
 
-The examples use `api.example.com` and `signal.example.com`. Owned `workers.dev` origins also work;
-use the actual returned endpoints rather than upstream addresses.
+The examples use `api.example.com`, `signal.example.com` and `turn.example.com`. An owned
+`workers.dev` origin also works for the account service. Signal and TURN need their own DNS names
+and TLS certificates; use actual owned endpoints, not upstream addresses.
 
 The browser must see the client and account API on the same HTTPS origin. Staff can use
 `https://api.example.com/app` directly. Do not make credentialed browser requests to a separate API origin.
@@ -47,7 +50,8 @@ other shared secrets:
 | `REMOTE_AUTH_WEBHOOK_SECRET` | Worker and Signal. Use the same value on both. |
 | `SKILLS_ADMIN_TOKEN`, `SITE_REPORT_HASH_SECRET` | Worker |
 | `REMOTE_SESSION_SECRET`, optional `REMOTE_METRICS_TOKEN` | Signal |
-| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Signal; issued by your Cloudflare Realtime account, not random local strings |
+| `TURN_SHARED_SECRET` | Signal and coturn; the same independent random value, at least 32 bytes |
+| `CLOUDFLARE_DNS_API_TOKEN` | ACME only; an issued token restricted to your DNS zone |
 
 Keep the private JWK secret. With it, a person can open each host that uses your service.
 
@@ -58,8 +62,8 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    Check `wrangler whoami`: a Container-only OAuth login is insufficient. Account deployment needs
    D1 and Workers/R2 permissions, including `d1:write` and the applicable Workers write scopes.
    Review `wrangler login --scopes-list` and request only the necessary consent; do not grant every
-   available scope or activate a new subscription as an incidental deployment step. Realtime TURN
-   credentials are separate from this Wrangler login.
+   available scope or activate a new subscription as an incidental deployment step. The ACME DNS
+   token is a separate zone-scoped credential, not a random string or an upstream token.
 
 2. Supply the deployment environment from your secret manager. No encrypted upstream file is loaded.
    Required resource inputs are:
@@ -100,15 +104,19 @@ Keep the private JWK secret. With it, a person can open each host that uses your
 
 ## 3. Start Signal and TURN
 
-Follow the [Cloudflare Signal deployment procedure](remote-session-deployment.md). The required
-Worker bindings are the account and Signal HTTPS origins, `REMOTE_SESSION_SECRET`,
-`REMOTE_AUTH_WEBHOOK_SECRET` and the two Cloudflare Realtime issuer inputs from step 1.
-The Worker derives the account JWKS URL and allowed browser origin. Optional connector bindings
-stay absent unless you intentionally configure those integrations.
+Follow the [owned Linux Signal deployment procedure](remote-session-deployment.md). Supply
+`SIGNAL_DOMAIN`, `TURN_DOMAIN`, `TURN_PUBLIC_IP`, `ACME_EMAIL` and the zone-scoped DNS token.
+Set `REMOTE_CONTROL_PLANE_URL` to the owned account origin and `REMOTE_TICKET_JWKS_URL` to its
+`/.well-known/jwks.json`. Set `REMOTE_BROWSER_ORIGIN` when the browser uses a different exact origin.
+Signal uses `REMOTE_SESSION_SECRET` and the same `REMOTE_AUTH_WEBHOOK_SECRET` as the account
+service; Signal and coturn share `TURN_SHARED_SECRET`. Optional connector settings stay absent
+unless you configure apps that you own.
 
-`bun run remote:update --deploy` deploys with operation disabled. Starting the fixed Signal
-Container requires explicit `--enable` and a runtime allowance. Use the actual returned public
-origin to configure both services. The old production Compose/coturn/ACME path is removed.
+Run `bun run remote:check:compose` for an isolated configuration check. After separate deployment
+and runtime approval, run `bun run remote:update --deploy` on the intended Linux host with
+`REMOTE_DEPLOY_HOST` set to that host's name and explicit owned settings in the environment.
+It builds the images, starts ACME/Signal and drains then replaces coturn. It loads no encrypted
+upstream env file and does not deploy a Cloudflare Signal Container or use Realtime TURN.
 
 Check `/health/live` and `/health/ready`, then exercise real authenticated WSS and a relay-only
 connection. Health alone does not verify TURN, session preservation or access revocation.
@@ -189,5 +197,5 @@ For malformed configuration, set a bad Worker value and run the check with `--in
 
 After an approved update, retain your owned resource inputs and secret-manager configuration,
 run deployment preflight, and deploy compatible account migrations/source. Update Signal through
-the explicit Cloudflare deployment procedure, not the removed production Compose path. Verify
-real sessions and relay behavior before restoring production access.
+the owned Linux deployment procedure. Verify real sessions and relay behavior before restoring
+production access. Existing TURN credentials can remain usable until expiry after access revocation.

@@ -1,6 +1,6 @@
 # Hosted servers
 
-This fork manages one organization-funded OpenBot desktop on a DigitalOcean Droplet with a separately retained ext4 Volume. Accounts and the browser app run on Cloudflare Workers with owned D1 and R2 resources. Signal runs in a fixed-identity Cloudflare Container; TURN uses Cloudflare Realtime.
+This fork manages one organization-funded OpenBot desktop on a DigitalOcean Droplet with a separately retained ext4 Volume. Accounts and the browser app run on Cloudflare Workers with owned D1 and R2 resources. Signal, coturn and ACME run on an owned Linux server through the upstream deployment stack; see [owned remote access](self-hosting.md).
 
 Cloudflare Containers has no production-supported native durable volume for this workload. This design uses an explicitly approved hosting exception; it is not a Cloudflare-native filesystem solution. A source change or passing local test is not proof of cloud persistence.
 
@@ -22,6 +22,11 @@ snapshot and shutdown rules. This is not the same contract as the retained nativ
 Cloudflare can run the application, but its [Container disk is ephemeral](https://developers.cloudflare.com/containers/faq/#is-disk-persistent-what-happens-to-my-disk-when-my-container-sleeps).
 D1 account records and point-in-time snapshots do not preserve the desktop's native SQLite,
 browser profiles and credential state as a supported replacement disk.
+
+The user retained native-volume preservation and ODIC-funded operator controls when selecting
+upstream reuse. These are deliberate differences from Boat snapshots and owner Stripe checkout.
+Copying the connection stack does not replace the desktop storage, funding or membership contract,
+and does not authorize a new server rental, subscription or production deployment.
 
 ## Parts
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch OpenBot Remote TLS certificate
+
+[Path]
+PathChanged=${ACME_DATA_PATH}/certificates/${SIGNAL_DOMAIN}.crt
+Unit=openbot-remote-nginx-reload.service
+
+[Install]
+WantedBy=multi-user.target

@@ -93,8 +93,6 @@ const SIGNAL_SETTINGS = new Set([
   "TELEGRAM_BOT_TOKENS",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_WEBHOOK_ORIGIN",
-  "CLOUDFLARE_TURN_KEY_ID",
-  "CLOUDFLARE_TURN_API_TOKEN",
 ]);
 
 export function developmentChildEnvironment(
@@ -112,9 +110,6 @@ export function developmentChildEnvironment(
   if (service === "app" || service === "test-client" || service === "api") {
     delete child.REMOTE_SESSION_SECRET;
     delete child.TURN_SHARED_SECRET;
-    delete child.CLOUDFLARE_TURN_KEY_ID;
-    delete child.CLOUDFLARE_TURN_API_TOKEN;
-    delete child.REMOTE_TURN_API_ORIGIN;
     delete child.REMOTE_METRICS_TOKEN;
   }
   return child;
